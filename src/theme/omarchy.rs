@@ -119,11 +119,9 @@ fn required(value: &Option<String>, key: &str) -> Result<Color, String> {
 }
 
 fn first(values: [&Option<String>; 3]) -> Color {
-    for value in values {
-        if let Some(text) = value {
-            if let Some(color) = super::parse_hex(text) {
-                return color;
-            }
+    for text in values.into_iter().flatten() {
+        if let Some(color) = super::parse_hex(text) {
+            return color;
         }
     }
     hex("888888")

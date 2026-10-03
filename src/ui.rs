@@ -132,38 +132,95 @@ fn draw_shares(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let block = panel("Network shares", editing, theme);
     let mut lines = Vec::new();
     if app.shares.is_empty() {
-        lines.push(Line::from("No network shares in /etc/fstab."));
-        lines.push(Line::from("Use New share below. Other lines in fstab are left untouched."));
+        lines.push(Line::from(Span::styled("No network shares configured in /etc/fstab.", Style::default().fg(theme.fg))));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("Quick Start Guide:", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))));
+        lines.push(Line::from("  1. Press 'n' (or select 'New share' in the Actions pane)."));
+        lines.push(Line::from("  2. Type your server address (e.g. \\\\192.168.1.100\\photos or //synology.local/data)."));
+        lines.push(Line::from("  3. Press Enter. The mount folder (/mnt/photos) will be created automatically."));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Works with Windows PC/laptop shares, Synology/QNAP/TrueNAS, Linux NFS, and SSHFS.",
+            Style::default().fg(theme.muted),
+        )));
     }
     for (index, share) in app.shares.iter().enumerate() {
-        let style = if index == app.share_index && editing {
+        let is_selected = index == app.share_index;
+        let mark = if share.mounted { "● " } else { "○ " };
+        let status_text = if share.mounted { "Connected" } else { "Disconnected" };
+        let status_color = if share.mounted { theme.green } else { theme.muted };
+
+        let proto_badge = match share.fstype.as_str() {
+            "cifs" | "smb" => "SMB",
+            "nfs" | "nfs4" => "NFS",
+            "fuse.sshfs" | "sshfs" => "SSHFS",
+            other => other,
+        };
+
+        let style = if is_selected && editing {
             theme.selected()
-        } else if index == app.share_index {
+        } else if is_selected {
             Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.fg)
         };
+
+        lines.push(Line::from(vec![
+            Span::styled(mark, Style::default().fg(status_color)),
+            Span::styled(format!("[{proto_badge}] "), Style::default().fg(theme.accent)),
+            Span::styled(format!("{} ", share.source), style),
+            Span::styled("→ ", Style::default().fg(theme.muted)),
+            Span::styled(format!("{} ", share.target), Style::default().fg(theme.fg)),
+            Span::styled(format!("({status_text})"), Style::default().fg(status_color)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("     Status: ", Style::default().fg(theme.muted)),
+            Span::styled(
+                if share.mounted { "Connected (files ready in folder)" } else { "Disconnected (press Enter to connect)" },
+                Style::default().fg(if share.mounted { theme.green } else { theme.muted }),
+            ),
+            if !share.options.is_empty() {
+                Span::styled(format!("  |  opts: {}", share.options), Style::default().fg(theme.muted))
+            } else {
+                Span::raw("")
+            },
+        ]));
+    }
+    if editing && !app.shares.is_empty() {
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            format!("{:<8} {}  →  {}", share.fstype, share.source, share.target),
-            style,
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("         {}", share.options),
-            Style::default().fg(theme.muted),
+            "Enter connect/disconnect   e edit   d delete   n new share   Esc back to disks",
+            Style::default().fg(theme.accent),
         )));
     }
     frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
 fn draw_dialog(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let rect = centered(area, 72, 20);
-    frame.render_widget(Clear, rect);
     match &app.dialog {
         Dialog::Form(form) => {
+            let rect = centered(area, 84, 26);
+            frame.render_widget(Clear, rect);
             let block = panel(&form.title, true, theme);
             let inner = block.inner(rect);
             frame.render_widget(block, rect);
-            let [body, hint] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+
+            let has_guide = inner.height >= 12;
+            let (body, guide_opt, hint) = if has_guide {
+                let [b, g, h] = Layout::vertical([
+                    Constraint::Min(6),
+                    Constraint::Length(4),
+                    Constraint::Length(1),
+                ]).areas(inner);
+                (b, Some(g), h)
+            } else {
+                let [b, h] = Layout::vertical([
+                    Constraint::Min(4),
+                    Constraint::Length(1),
+                ]).areas(inner);
+                (b, None, h)
+            };
+
             let mut lines = Vec::new();
             if !form.blurb.is_empty() {
                 lines.push(Line::from(Span::styled(form.blurb.clone(), Style::default().fg(theme.muted))));
@@ -178,15 +235,57 @@ fn draw_dialog(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             let height = body.height as usize;
             let scroll = row.saturating_sub(height.saturating_sub(1)) as u16;
             frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
+
+            if let Some(guide_area) = guide_opt {
+                if let Some(field) = form.fields.get(form.focus) {
+                    let req_span = if field.required {
+                        Span::styled("[MANDATORY] ", Style::default().fg(theme.yellow).add_modifier(Modifier::BOLD))
+                    } else {
+                        Span::styled("[OPTIONAL] ", Style::default().fg(theme.muted))
+                    };
+                    let guide_block = Block::default()
+                        .title(format!(" Help & Example: {} ", field.label))
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.accent))
+                        .style(theme.base());
+                    let mut guide_lines = Vec::new();
+                    if !field.hint.is_empty() {
+                        guide_lines.push(Line::from(vec![
+                            req_span,
+                            Span::styled(field.hint.clone(), Style::default().fg(theme.fg)),
+                        ]));
+                    } else if field.required {
+                        guide_lines.push(Line::from(vec![
+                            req_span,
+                            Span::styled("This field is required.", Style::default().fg(theme.fg)),
+                        ]));
+                    } else {
+                        guide_lines.push(Line::from(vec![
+                            req_span,
+                            Span::styled("This field is optional.", Style::default().fg(theme.muted)),
+                        ]));
+                    }
+                    if !field.placeholder.is_empty() {
+                        guide_lines.push(Line::from(vec![
+                            Span::styled("Example: ", Style::default().fg(theme.accent)),
+                            Span::styled(field.placeholder.clone(), Style::default().fg(theme.fg_dim)),
+                        ]));
+                    }
+                    frame.render_widget(Paragraph::new(guide_lines).block(guide_block).wrap(Wrap { trim: true }), guide_area);
+                }
+            }
+
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    "Enter confirms   Esc cancels   ← → changes a choice",
+                    "Enter confirms/saves   Esc cancels   Tab/↑↓ navigate   ← → edit/toggle",
                     Style::default().fg(theme.muted),
                 )),
                 hint,
             );
         }
         Dialog::Confirm(confirm) => {
+            let rect = centered(area, 64, 14);
+            frame.render_widget(Clear, rect);
             let block = panel(&confirm.title, true, theme);
             let inner = block.inner(rect);
             frame.render_widget(block, rect);
@@ -206,6 +305,8 @@ fn draw_dialog(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             frame.render_widget(Paragraph::new(lines), inner);
         }
         Dialog::Text { title, body, scroll } => {
+            let rect = centered(area, 96, 34);
+            frame.render_widget(Clear, rect);
             let block = panel(title, true, theme);
             frame.render_widget(
                 Paragraph::new(body.as_str()).block(block).scroll((*scroll, 0)).wrap(Wrap { trim: false }),
@@ -394,6 +495,19 @@ fn detail_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
                 }
                 if drive.nvme {
                     push(&mut lines, "NVMe", "controller".into());
+                    if let Some(temp) = drive.nvme_temp {
+                        push(&mut lines, "Temperature", format!("{temp}°C"));
+                    }
+                    if let Some(hours) = drive.nvme_hours {
+                        let days = hours / 24;
+                        push(&mut lines, "Power-on", format!("{hours} hours ({days} days)"));
+                    }
+                    if let Some(selftest) = &drive.nvme_selftest {
+                        push(&mut lines, "Self-test", selftest.clone());
+                    }
+                    if let Some(sanitize) = &drive.nvme_sanitize {
+                        push(&mut lines, "Sanitize", sanitize.clone());
+                    }
                 }
                 if let Some(ata) = &drive.ata {
                     if ata.security_frozen {
@@ -473,6 +587,13 @@ fn volume_lines(lines: &mut Vec<Line<'static>>, app: &App, block: &model::Block,
     }
     if !block.mount_points.is_empty() {
         push(lines, "Mounted", block.mount_points.join(", "));
+        if let Some(target) = block.mount_points.first() {
+            if let Some((used, total)) = model::fs_usage(target) {
+                let pct = if total > 0 { (used as f64 / total as f64 * 100.0).round() as u64 } else { 0 };
+                let free = total.saturating_sub(used);
+                push(lines, "Space", format!("{} / {} used ({}%) — {} free", human_size(used), human_size(total), pct, human_size(free)));
+            }
+        }
     }
     if block.swap {
         push(lines, "Swap", if block.swap_active { "active".into() } else { "inactive".into() });
@@ -494,28 +615,92 @@ fn volume_lines(lines: &mut Vec<Line<'static>>, app: &App, block: &model::Block,
 }
 
 fn field_line(field: &Field, focused: bool, width: usize, theme: &Theme) -> Line<'static> {
-    let mut value = if field.secret {
-        "•".repeat(field.value.chars().count())
-    } else if field.toggle {
-        if field.value == "yes" { "[x]".into() } else { "[ ]".into() }
-    } else if !field.choices.is_empty() {
-        format!("< {} >", field.value)
+    let mut spans = Vec::new();
+
+    let label_style = if focused {
+        theme.selected().add_modifier(Modifier::BOLD)
     } else {
-        field.value.clone()
+        Style::default().fg(theme.fg)
     };
-    if focused && field.choices.is_empty() && !field.toggle {
-        value.push('█');
-    }
-    let text = format!("{:<16}{value}", field.label);
-    if focused {
-        let pad = width.max(text.chars().count());
-        Line::from(Span::styled(format!("{text:<pad$}"), theme.selected()))
+    let marker_style = if focused {
+        theme.selected().add_modifier(Modifier::BOLD)
+    } else if field.required {
+        Style::default().fg(theme.yellow).add_modifier(Modifier::BOLD)
     } else {
-        Line::from(vec![
-            Span::styled(format!("{:<16}", field.label), Style::default().fg(theme.muted)),
-            Span::styled(value, Style::default().fg(theme.fg)),
-        ])
+        Style::default().fg(theme.muted)
+    };
+
+    let label_str = format!("{:<19}", field.label);
+    spans.push(Span::styled(label_str, label_style));
+    if field.required {
+        spans.push(Span::styled("*  ", marker_style));
+    } else {
+        spans.push(Span::styled("   ", marker_style));
     }
+
+    let is_empty = field.value.is_empty();
+    if field.toggle {
+        let toggle_str = if field.value == "yes" { "[x] Yes" } else { "[ ] No " };
+        let style = if focused {
+            theme.selected()
+        } else if field.value == "yes" {
+            Style::default().fg(theme.green)
+        } else {
+            Style::default().fg(theme.muted)
+        };
+        spans.push(Span::styled(toggle_str, style));
+    } else if !field.choices.is_empty() {
+        let choice_str = format!("< {} >", field.value);
+        let style = if focused {
+            theme.selected()
+        } else {
+            Style::default().fg(theme.accent)
+        };
+        spans.push(Span::styled(choice_str, style));
+    } else if is_empty {
+        if focused {
+            spans.push(Span::styled("█", theme.selected()));
+            if !field.placeholder.is_empty() {
+                spans.push(Span::styled(format!("  (e.g. {})", field.placeholder), Style::default().fg(theme.muted)));
+            }
+        } else if !field.placeholder.is_empty() {
+            spans.push(Span::styled(format!("e.g. {}", field.placeholder), Style::default().fg(theme.muted)));
+        }
+    } else {
+        let mut display_val = if field.secret {
+            "•".repeat(field.value.chars().count())
+        } else {
+            field.value.clone()
+        };
+
+        if focused {
+            let chars: Vec<char> = display_val.chars().collect();
+            let cursor_idx = field.cursor.min(chars.len());
+            let mut with_cursor = String::new();
+            for (i, c) in chars.iter().enumerate() {
+                if i == cursor_idx {
+                    with_cursor.push('▏');
+                }
+                with_cursor.push(*c);
+            }
+            if cursor_idx >= chars.len() {
+                with_cursor.push('█');
+            }
+            display_val = with_cursor;
+            spans.push(Span::styled(display_val, theme.selected()));
+        } else {
+            spans.push(Span::styled(display_val, Style::default().fg(theme.fg)));
+        }
+    }
+
+    if focused {
+        let total_chars: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        if total_chars < width {
+            spans.push(Span::styled(" ".repeat(width - total_chars), theme.selected()));
+        }
+    }
+
+    Line::from(spans)
 }
 
 fn typed_line(label: &str, value: &str, focused: bool, theme: &Theme) -> Line<'static> {

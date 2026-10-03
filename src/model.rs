@@ -37,6 +37,10 @@ pub struct Drive {
     pub ata: Option<Ata>,
     pub nvme: bool,
     pub nvme_path: String,
+    pub nvme_temp: Option<i32>,
+    pub nvme_hours: Option<u64>,
+    pub nvme_selftest: Option<String>,
+    pub nvme_sanitize: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -893,7 +897,25 @@ pub fn confirm_ok(kernel: &str, typed: &str, system: bool, ack: &str) -> bool {
 }
 
 pub fn is_system_mount(path: &str) -> bool {
-    matches!(path, "/" | "/home" | "/boot") || path.starts_with("/boot/")
+    matches!(path, "/" | "/home" | "/boot" | "/usr" | "/var" | "/etc") || path.starts_with("/boot/")
+}
+
+pub fn fs_usage(path: &str) -> Option<(u64, u64)> {
+    let c_path = std::ffi::CString::new(path).ok()?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    let res = unsafe { libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) };
+    if res != 0 {
+        return None;
+    }
+    let stat = unsafe { stat.assume_init() };
+    let block_size = if stat.f_frsize > 0 { stat.f_frsize } else { stat.f_bsize };
+    let total = stat.f_blocks.saturating_mul(block_size);
+    let free = stat.f_bavail.saturating_mul(block_size);
+    if total == 0 {
+        return None;
+    }
+    let used = total.saturating_sub(free);
+    Some((used, total))
 }
 
 pub fn segments(disk_size: u64, parts: &[(u64, u64, String, String)]) -> Vec<Segment> {
@@ -1216,5 +1238,24 @@ mod tests {
         };
         distinct(ActionId::Smart, ActionId::SmartTest);
         distinct(ActionId::CreateImage, ActionId::RestoreImage);
+    }
+
+    #[test]
+    fn system_mount_and_fs_usage() {
+        assert!(super::is_system_mount("/"));
+        assert!(super::is_system_mount("/boot"));
+        assert!(super::is_system_mount("/boot/efi"));
+        assert!(super::is_system_mount("/usr"));
+        assert!(super::is_system_mount("/var"));
+        assert!(super::is_system_mount("/etc"));
+        assert!(!super::is_system_mount("/mnt/data"));
+        assert!(!super::is_system_mount("/media/usb"));
+
+        // fs_usage on / should succeed on any running Linux system
+        let usage = super::fs_usage("/");
+        assert!(usage.is_some());
+        let (used, total) = usage.unwrap();
+        assert!(total > 0);
+        assert!(used <= total);
     }
 }

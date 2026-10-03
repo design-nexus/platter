@@ -136,7 +136,7 @@ async fn run(
                             privilege::SudoJob::ApplyFstab { .. } => "fstab updated.".into(),
                         };
                     }
-                    Err(err) => app.error = err,
+                    Err(err) => app.error = fstab::explain_mount_error(&err),
                 }
                 app.reload_fstab();
             }

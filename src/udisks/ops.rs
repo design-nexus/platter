@@ -648,16 +648,16 @@ async fn image_copy(
         .map_err(|e| anyhow!(e))?;
     let device = std::fs::File::from(OwnedFd::from(fd));
     if restore {
-        let mut image_file = std::fs::File::open(image).with_context(|| format!("open {image}"))?;
+        let image_file = std::fs::File::open(image).with_context(|| format!("open {image}"))?;
         let image_len = image_file.metadata()?.len();
         let total = size.min(image_len);
         let label = "Restoring";
         // Buffered copy. OpenDevice is not O_DIRECT, so alignment is not required.
-        copy_streams(&mut image_file, &device, total, true, label, cancel, tx)?;
+        copy_streams(&image_file, &device, total, true, label, cancel, tx)?;
         Ok(format!("Restored {image}."))
     } else {
-        let mut image_file = std::fs::File::create(image).with_context(|| format!("create {image}"))?;
-        copy_streams(&device, &mut image_file, size, false, "Reading", cancel, tx)?;
+        let image_file = std::fs::File::create(image).with_context(|| format!("create {image}"))?;
+        copy_streams(&device, &image_file, size, false, "Reading", cancel, tx)?;
         Ok(format!("Image written to {image}."))
     }
 }
@@ -720,7 +720,7 @@ fn copy_streams(
     reader: &std::fs::File,
     writer: &std::fs::File,
     total: u64,
-    restore: bool,
+    _restore: bool,
     label: &str,
     cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
     tx: &UnboundedSender<Msg>,
@@ -752,11 +752,7 @@ fn copy_streams(
             cancel: true,
         })));
     }
-    if restore {
-        writer.sync_all()?;
-    } else {
-        writer.sync_all()?;
-    }
+    writer.sync_all()?;
     Ok(())
 }
 
@@ -771,7 +767,7 @@ fn empty_map() -> HashMap<&'static str, Value<'static>> {
 fn options_as_value(options: &HashMap<String, OwnedValue>) -> Result<HashMap<String, Value<'static>>> {
     let mut out = HashMap::new();
     for (key, value) in options {
-        let cloned = zbus::zvariant::Value::try_clone(&**value).map_err(|e| anyhow!(e))?;
+        let cloned = zbus::zvariant::Value::try_clone(value).map_err(|e| anyhow!(e))?;
         out.insert(key.clone(), cloned);
     }
     Ok(out)

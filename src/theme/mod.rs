@@ -109,6 +109,18 @@ pub static CHOICES: &[Choice] = &[
         label: "Tokyo Night",
     },
     Choice {
+        id: "tokyo-night-storm",
+        label: "Tokyo Night Storm",
+    },
+    Choice {
+        id: "tokyo-night-moon",
+        label: "Tokyo Night Moon",
+    },
+    Choice {
+        id: "one-dark-pro",
+        label: "One Dark Pro",
+    },
+    Choice {
         id: "dracula",
         label: "Dracula",
     },
@@ -128,6 +140,18 @@ pub static CHOICES: &[Choice] = &[
         id: "rose-pine",
         label: "Rosé Pine",
     },
+    Choice {
+        id: "everforest",
+        label: "Everforest",
+    },
+    Choice {
+        id: "solarized-dark",
+        label: "Solarized Dark",
+    },
+    Choice {
+        id: "kanagawa",
+        label: "Kanagawa",
+    },
 ];
 
 pub fn known(id: &str) -> bool {
@@ -142,11 +166,17 @@ pub fn by_id(id: &str) -> Option<Theme> {
         "catppuccin-frappe" => frappe(),
         "catppuccin-latte" => latte(),
         "tokyo-night" => tokyo_night(),
+        "tokyo-night-storm" => tokyo_night_storm(),
+        "tokyo-night-moon" => tokyo_night_moon(),
+        "one-dark-pro" => one_dark_pro(),
         "dracula" => dracula(),
         "gruvbox-dark" => gruvbox_dark(),
         "gruvbox-light" => gruvbox_light(),
         "nord" => nord(),
         "rose-pine" => rose_pine(),
+        "everforest" => everforest(),
+        "solarized-dark" => solarized_dark(),
+        "kanagawa" => kanagawa(),
         _ => return None,
     })
 }
@@ -162,14 +192,14 @@ pub fn resolve(id: &str, omarchy: Option<&Theme>, custom: Option<&Theme>) -> The
             return theme.clone();
         }
     }
-    by_id(id).unwrap_or_else(mocha)
+    by_id(id).unwrap_or_else(tokyo_night)
 }
 
 pub fn fallback_id(omarchy_installed: bool) -> &'static str {
     if omarchy_installed {
         "omarchy"
     } else {
-        "catppuccin-mocha"
+        "tokyo-night"
     }
 }
 
@@ -380,6 +410,72 @@ fn rose_pine() -> Theme {
         ],
     )
 }
+fn tokyo_night_storm() -> Theme {
+    pal(
+        "tokyo-night-storm",
+        "Tokyo Night Storm",
+        Kind::Dark,
+        [
+            "24283b", "1b1e2d", "2e3c64", "292e42", "3b4261", "c0caf5", "a9b1d6", "565f89",
+            "7aa2f7", "f7768e", "e0af68", "9ece6a", "7dcfff", "7aa2f7", "bb9af7",
+        ],
+    )
+}
+fn tokyo_night_moon() -> Theme {
+    pal(
+        "tokyo-night-moon",
+        "Tokyo Night Moon",
+        Kind::Dark,
+        [
+            "222436", "191a2a", "2d3f76", "2f334d", "3b4261", "c8d3f5", "b8c0e0", "636da6",
+            "82aaff", "ff757f", "ffc777", "c3e88d", "86e1fc", "82aaff", "c099ff",
+        ],
+    )
+}
+fn one_dark_pro() -> Theme {
+    pal(
+        "one-dark-pro",
+        "One Dark Pro",
+        Kind::Dark,
+        [
+            "282c34", "181a1f", "2c313a", "3e4451", "4b5263", "abb2bf", "abb2bf", "5c6370",
+            "61afef", "e06c75", "e5c07b", "98c379", "56b6c2", "61afef", "c678dd",
+        ],
+    )
+}
+fn everforest() -> Theme {
+    pal(
+        "everforest",
+        "Everforest",
+        Kind::Dark,
+        [
+            "2d353b", "1e2326", "3d484d", "3d484d", "475258", "d3c6aa", "d3c6aa", "859289",
+            "a7c080", "e67e80", "dbbc7f", "a7c080", "7fbbb3", "7fbbb3", "d699b6",
+        ],
+    )
+}
+fn solarized_dark() -> Theme {
+    pal(
+        "solarized-dark",
+        "Solarized Dark",
+        Kind::Dark,
+        [
+            "002b36", "001e26", "073642", "073642", "0f4a56", "93a1a1", "93a1a1", "586e75",
+            "268bd2", "dc322f", "b58900", "859900", "2aa198", "268bd2", "d33682",
+        ],
+    )
+}
+fn kanagawa() -> Theme {
+    pal(
+        "kanagawa",
+        "Kanagawa",
+        Kind::Dark,
+        [
+            "1f1f28", "0d0c0c", "2d4f67", "2a2a37", "363646", "dcd7ba", "dcd7ba", "727169",
+            "7e9cd8", "e82424", "e6c384", "76946a", "7aa89f", "7e9cd8", "957fb8",
+        ],
+    )
+}
 
 #[cfg(test)]
 mod tests {
@@ -396,11 +492,17 @@ mod tests {
             "catppuccin-frappe",
             "catppuccin-latte",
             "tokyo-night",
+            "tokyo-night-storm",
+            "tokyo-night-moon",
+            "one-dark-pro",
             "dracula",
             "gruvbox-dark",
             "gruvbox-light",
             "nord",
             "rose-pine",
+            "everforest",
+            "solarized-dark",
+            "kanagawa",
         ] {
             assert!(known(id), "missing {id}");
             if id != "omarchy" && id != "custom" {
@@ -416,7 +518,7 @@ mod tests {
         let theme = resolve("omarchy", Some(&custom), None);
         assert_eq!(theme.name, "Omarchy · catppuccin");
         let fallback = resolve("omarchy", None, None);
-        assert_eq!(fallback.id, "catppuccin-mocha");
+        assert_eq!(fallback.id, "tokyo-night");
     }
 
     #[test]

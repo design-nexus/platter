@@ -132,6 +132,18 @@ fn parse_model(objects: &RawObjects) -> Model {
 }
 
 fn parse_drive(path: &str, props: &Props, ata: Option<&Props>, nvme: Option<&Props>) -> Drive {
+    let nvme_temp = nvme.and_then(|p| {
+        let t = prop_u64(p, "SmartTemperature");
+        if t > 0 {
+            Some((t as i64 - 273) as i32)
+        } else {
+            None
+        }
+    });
+    let nvme_hours = nvme.map(|p| prop_u64(p, "SmartPowerOnHours")).filter(|h| *h > 0);
+    let nvme_selftest = nvme.map(|p| prop_str(p, "SmartSelftestStatus")).filter(|s| !s.is_empty());
+    let nvme_sanitize = nvme.map(|p| prop_str(p, "SanitizeStatus")).filter(|s| !s.is_empty());
+
     Drive {
         path: path.to_string(),
         vendor: prop_str(props, "Vendor"),
@@ -151,6 +163,10 @@ fn parse_drive(path: &str, props: &Props, ata: Option<&Props>, nvme: Option<&Pro
         ata: ata.map(parse_ata),
         nvme: nvme.is_some(),
         nvme_path: path.to_string(),
+        nvme_temp,
+        nvme_hours,
+        nvme_selftest,
+        nvme_sanitize,
     }
 }
 
@@ -218,7 +234,7 @@ fn parse_block(path: &str, props: &Props, ifaces: &HashMap<OwnedInterfaceName, P
         loopback: loop_dev.is_some(),
         backing_file: loop_dev.map(|props| prop_bytes(props, "BackingFile")).unwrap_or_default(),
         loop_autoclear: loop_dev.is_some_and(|props| prop_bool(props, "Autoclear")),
-        config: props.get("Configuration").map(|v| parse_config(v)).unwrap_or_default(),
+        config: props.get("Configuration").map(parse_config).unwrap_or_default(),
     }
 }
 
@@ -420,7 +436,7 @@ fn prop_paths(props: &Props, name: &str) -> Vec<String> {
 }
 
 fn prop_dict(props: &Props, name: &str) -> Vec<(String, PropVal)> {
-    prop(props, name).map(|value| dict_props(value)).unwrap_or_default()
+    prop(props, name).map(dict_props).unwrap_or_default()
 }
 
 /// Keep a value alive as an owned D-Bus value.

@@ -32,7 +32,11 @@ pub fn run(job: &SudoJob) -> Result<String, String> {
             );
             fstab::render_script(&backup, contents, creds.as_ref(), mount.as_deref())
         }
-        SudoJob::Mount(target) => format!("set -eu\nmount -- {}\n", fstab::sh_quote(target)),
+        SudoJob::Mount(target) => format!(
+            "set -eu\ninstall -d -m 755 {}\nmount -- {}\n",
+            fstab::sh_quote(target),
+            fstab::sh_quote(target)
+        ),
         SudoJob::Umount(target) => format!("set -eu\numount -- {}\n", fstab::sh_quote(target)),
     };
     pause()?;

@@ -31,9 +31,13 @@ pub enum Effect {
 pub struct Field {
     pub label: String,
     pub value: String,
+    pub cursor: usize,
     pub choices: Vec<String>,
     pub secret: bool,
     pub toggle: bool,
+    pub required: bool,
+    pub placeholder: String,
+    pub hint: String,
 }
 
 pub struct Form {
@@ -196,15 +200,15 @@ impl App {
                 } else {
                     None
                 };
-                let jump = self.select_path.take();
                 self.model = model;
                 self.rebuild_rows(keep);
-                if let Some(path) = jump {
+                if let Some(path) = self.select_path.as_ref() {
                     if let Some(index) = self.rows.iter().position(|row| match &row.kind {
-                        RowKind::Volume { block } => block == &path,
+                        RowKind::Volume { block } => block == path,
                         _ => false,
                     }) {
                         self.selected = index;
+                        self.select_path = None;
                     }
                 }
                 if let Some(file) = self.attach.take() {
@@ -241,7 +245,9 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('q') || key.code == KeyCode::Char('w'))
+        {
             self.quit = true;
             return;
         }
@@ -274,6 +280,9 @@ impl App {
             KeyCode::Esc | KeyCode::Left if self.focus == Focus::Shares => {
                 self.focus = Focus::Devices;
             }
+            KeyCode::Char('n') if self.focus == Focus::Shares => self.open_share(true),
+            KeyCode::Char('e') if self.focus == Focus::Shares => self.open_share(false),
+            KeyCode::Char('d') | KeyCode::Delete if self.focus == Focus::Shares => self.delete_share(),
             KeyCode::Char('1') => {
                 self.focus = Focus::Devices;
                 if matches!(self.current_kind(), Some(RowKind::Shares)) {
@@ -353,7 +362,13 @@ impl App {
                     }
                 }
             }
-            Focus::Shares => self.open_share(self.shares.is_empty()),
+            Focus::Shares => {
+                if let Some(share) = self.shares.get(self.share_index) {
+                    self.mount_share(!share.mounted);
+                } else {
+                    self.open_share(true);
+                }
+            }
             Focus::Devices => match self.current_kind() {
                 Some(RowKind::Shares) => self.focus = Focus::Shares,
                 Some(RowKind::Free { .. }) => self.open_action(ActionId::CreatePartition),
@@ -383,12 +398,36 @@ impl App {
     }
 
     fn key_form(&mut self, key: KeyEvent) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('u') => {
+                    self.form_clear_to_start();
+                    return;
+                }
+                KeyCode::Char('w') => {
+                    self.form_delete_word();
+                    return;
+                }
+                KeyCode::Char('a') => {
+                    self.form_home();
+                    return;
+                }
+                KeyCode::Char('e') => {
+                    self.form_end();
+                    return;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Esc => self.dialog = Dialog::None,
             KeyCode::Up | KeyCode::BackTab => self.form_move(-1),
             KeyCode::Down | KeyCode::Tab => self.form_move(1),
-            KeyCode::Left => self.form_cycle(-1),
-            KeyCode::Right => self.form_cycle(1),
+            KeyCode::Left => self.form_left(),
+            KeyCode::Right => self.form_right(),
+            KeyCode::Home => self.form_home(),
+            KeyCode::End => self.form_end(),
+            KeyCode::Delete => self.form_delete(),
             KeyCode::Char(' ') => self.form_space(),
             KeyCode::Enter => self.submit_form(),
             KeyCode::Backspace => self.form_backspace(),
@@ -506,12 +545,13 @@ impl App {
     pub fn actions(&self) -> Vec<model::Action> {
         if matches!(self.current_kind(), Some(RowKind::Shares)) {
             let has = !self.shares.is_empty();
+            let is_mounted = self.shares.get(self.share_index).is_some_and(|s| s.mounted);
             return vec![
                 share_action(ActionId::NewShare, true, ""),
+                share_action(ActionId::MountShare, has && !is_mounted, if is_mounted { "Already connected" } else { "No share selected" }),
+                share_action(ActionId::UnmountShare, has && is_mounted, if !is_mounted { "Not connected" } else { "No share selected" }),
                 share_action(ActionId::EditShare, has, "No share selected"),
                 share_action(ActionId::RemoveShare, has, "No share selected"),
-                share_action(ActionId::MountShare, has, "No share selected"),
-                share_action(ActionId::UnmountShare, has, "No share selected"),
             ];
         }
         let Some(row) = self.rows.get(self.selected) else {
@@ -1091,6 +1131,9 @@ impl App {
         let Dialog::Form(form) = &mut self.dialog else { return };
         if form.fields.is_empty() { return; }
         form.focus = slide(form.focus, form.fields.len(), dir);
+        if let Some(field) = form.fields.get_mut(form.focus) {
+            field.cursor = field.value.chars().count();
+        }
     }
 
     fn form_cycle(&mut self, dir: i32) {
@@ -1103,6 +1146,101 @@ impl App {
             let next = slide(index, field.choices.len(), dir);
             field.value = field.choices[next].clone();
         }
+    }
+
+    fn form_left(&mut self) {
+        let Dialog::Form(form) = &mut self.dialog else { return };
+        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        if field.toggle || !field.choices.is_empty() {
+            self.form_cycle(-1);
+        } else if field.cursor > 0 {
+            field.cursor -= 1;
+        }
+    }
+
+    fn form_right(&mut self) {
+        let Dialog::Form(form) = &mut self.dialog else { return };
+        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        if field.toggle || !field.choices.is_empty() {
+            self.form_cycle(1);
+        } else {
+            let count = field.value.chars().count();
+            if field.cursor < count {
+                field.cursor += 1;
+            }
+        }
+    }
+
+    fn form_home(&mut self) {
+        let Dialog::Form(form) = &mut self.dialog else { return };
+        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        field.cursor = 0;
+    }
+
+    fn form_end(&mut self) {
+        let Dialog::Form(form) = &mut self.dialog else { return };
+        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        field.cursor = field.value.chars().count();
+    }
+
+    fn form_delete(&mut self) {
+        let Dialog::Form(form) = &mut self.dialog else { return };
+        let is_share = matches!(form.id, FormId::Share);
+        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        if field.toggle || !field.choices.is_empty() {
+            return;
+        }
+        let is_source = is_share && field.label == "Source";
+        let mut chars: Vec<char> = field.value.chars().collect();
+        if field.cursor < chars.len() {
+            chars.remove(field.cursor);
+            field.value = chars.into_iter().collect();
+        }
+        let new_source = if is_source { Some(field.value.clone()) } else { None };
+
+        if let Some(src) = new_source {
+            if let Some(share_name) = fstab::extract_share_name(&src) {
+                if let Some(mp) = form.fields.iter_mut().find(|f| f.label == "Mount point") {
+                    if mp.value.is_empty() || mp.value == "/mnt/" || mp.value.starts_with("/mnt/") {
+                        mp.value = format!("/mnt/{share_name}");
+                        mp.cursor = mp.value.chars().count();
+                    }
+                }
+            }
+        }
+    }
+
+    fn form_clear_to_start(&mut self) {
+        let Dialog::Form(form) = &mut self.dialog else { return };
+        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        if field.toggle || !field.choices.is_empty() {
+            return;
+        }
+        let chars: Vec<char> = field.value.chars().collect();
+        if field.cursor <= chars.len() {
+            field.value = chars[field.cursor..].iter().collect();
+            field.cursor = 0;
+        }
+    }
+
+    fn form_delete_word(&mut self) {
+        let Dialog::Form(form) = &mut self.dialog else { return };
+        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        if field.toggle || !field.choices.is_empty() || field.cursor == 0 {
+            return;
+        }
+        let chars: Vec<char> = field.value.chars().collect();
+        let mut new_cursor = field.cursor;
+        while new_cursor > 0 && chars[new_cursor - 1].is_whitespace() {
+            new_cursor -= 1;
+        }
+        while new_cursor > 0 && !chars[new_cursor - 1].is_whitespace() {
+            new_cursor -= 1;
+        }
+        let mut new_chars = chars[..new_cursor].to_vec();
+        new_chars.extend_from_slice(&chars[field.cursor..]);
+        field.value = new_chars.into_iter().collect();
+        field.cursor = new_cursor;
     }
 
     fn form_space(&mut self) {
@@ -1119,20 +1257,57 @@ impl App {
 
     fn form_insert(&mut self, ch: char) {
         let Dialog::Form(form) = &mut self.dialog else { return };
+        let is_share = matches!(form.id, FormId::Share);
         let Some(field) = form.fields.get_mut(form.focus) else { return };
         if field.toggle || !field.choices.is_empty() {
             return;
         }
-        field.value.push(ch);
+        let is_source = is_share && field.label == "Source";
+        let mut chars: Vec<char> = field.value.chars().collect();
+        let idx = field.cursor.min(chars.len());
+        chars.insert(idx, ch);
+        field.value = chars.into_iter().collect();
+        field.cursor = idx + 1;
+        let new_source = if is_source { Some(field.value.clone()) } else { None };
+
+        if let Some(src) = new_source {
+            if let Some(share_name) = fstab::extract_share_name(&src) {
+                if let Some(mp) = form.fields.iter_mut().find(|f| f.label == "Mount point") {
+                    if mp.value.is_empty() || mp.value == "/mnt/" || mp.value.starts_with("/mnt/") {
+                        mp.value = format!("/mnt/{share_name}");
+                        mp.cursor = mp.value.chars().count();
+                    }
+                }
+            }
+        }
     }
 
     fn form_backspace(&mut self) {
         let Dialog::Form(form) = &mut self.dialog else { return };
+        let is_share = matches!(form.id, FormId::Share);
         let Some(field) = form.fields.get_mut(form.focus) else { return };
         if field.toggle || !field.choices.is_empty() {
             return;
         }
-        field.value.pop();
+        let is_source = is_share && field.label == "Source";
+        let mut chars: Vec<char> = field.value.chars().collect();
+        if field.cursor > 0 && field.cursor <= chars.len() {
+            chars.remove(field.cursor - 1);
+            field.cursor -= 1;
+            field.value = chars.into_iter().collect();
+        }
+        let new_source = if is_source { Some(field.value.clone()) } else { None };
+
+        if let Some(src) = new_source {
+            if let Some(share_name) = fstab::extract_share_name(&src) {
+                if let Some(mp) = form.fields.iter_mut().find(|f| f.label == "Mount point") {
+                    if mp.value.is_empty() || mp.value == "/mnt/" || mp.value.starts_with("/mnt/") {
+                        mp.value = format!("/mnt/{share_name}");
+                        mp.cursor = mp.value.chars().count();
+                    }
+                }
+            }
+        }
     }
 
     fn focus_shares(&mut self) {
@@ -1154,30 +1329,46 @@ impl App {
     fn open_share(&mut self, fresh: bool) {
         let share = if fresh { None } else { self.shares.get(self.share_index).cloned() };
         let protocol = share.as_ref().map(|s| s.fstype.clone()).unwrap_or_else(|| "cifs".into());
+        let proto_choice = match protocol.as_str() {
+            "cifs" | "smb" => "Windows / NAS (SMB)",
+            "nfs" | "nfs4" => "Linux / UNIX (NFS)",
+            "fuse.sshfs" | "sshfs" => "SSH / Server (SSHFS)",
+            _ => "Custom",
+        };
         let extra = share.as_ref().map(|s| s.options.clone()).unwrap_or_default();
+        let blurb = if fresh {
+            let mut b = String::from("Add a network folder from a Windows PC, NAS (Synology, TrueNAS, QNAP), or Linux server.");
+            if let Some(missing) = fstab::missing_helper("cifs") {
+                b.push(' ');
+                b.push_str(&missing);
+            }
+            b
+        } else {
+            "Passwords are saved securely in root-only /etc/disktui-credentials.*, not in plain text in fstab.".into()
+        };
         self.dialog = Dialog::Form(Form {
             title: if fresh { "Add network share".into() } else { "Edit network share".into() },
-            blurb: "The password is stored in a root-only credentials file, not in fstab.".into(),
+            blurb,
             fields: vec![
-                choice("Protocol", ["cifs", "nfs", "nfs4", "fuse.sshfs", "custom"].map(str::to_string).to_vec(), if ["cifs", "nfs", "nfs4", "fuse.sshfs"].contains(&protocol.as_str()) { &protocol } else { "custom" }),
-                text("Type", if ["cifs", "nfs", "nfs4", "fuse.sshfs"].contains(&protocol.as_str()) { "" } else { &protocol }),
-                text("Source", share.as_ref().map(|s| s.source.as_str()).unwrap_or("")),
-                text("Mount point", share.as_ref().map(|s| s.target.as_str()).unwrap_or("/mnt/")),
-                toggle("Guest", extra.split(',').any(|o| o == "guest")),
-                text("Username", ""),
-                secret("Password"),
-                text("Credentials file", opt_of(&extra, "credentials").unwrap_or_default().as_str()),
-                text("SSH identity", opt_of(&extra, "IdentityFile").unwrap_or_default().as_str()),
-                text("Extra options", &extra),
-                toggle("_netdev", extra.contains("_netdev") || fresh),
-                toggle("nofail", extra.contains("nofail") || fresh),
-                toggle("Automount", extra.contains("x-systemd.automount")),
-                text("Idle timeout", &opt_of(&extra, "x-systemd.idle-timeout").unwrap_or_default()),
-                choice("SMB version", ["default", "3.1.1", "3.0", "2.1"].map(str::to_string).to_vec(), &opt_of(&extra, "vers").unwrap_or_else(|| "default".into())),
-                toggle("Mount now", false),
-                text("Id", share.as_ref().map(|s| s.id.as_str()).unwrap_or("")),
+                choice_req("Protocol", ["Windows / NAS (SMB)", "Linux / UNIX (NFS)", "SSH / Server (SSHFS)", "Custom"].map(str::to_string).to_vec(), proto_choice, "Share type. Use SMB for Windows, Synology, QNAP, or Samba. Use NFS for Linux/TrueNAS. Use SSHFS for remote servers."),
+                text_req("Source", share.as_ref().map(|s| s.source.as_str()).unwrap_or(""), "\\\\server\\share or //192.168.1.100/data", "Address and folder on your NAS/server. Slashes (/) and backslashes (\\) are both supported."),
+                text_req("Mount point", share.as_ref().map(|s| s.target.as_str()).unwrap_or("/mnt/"), "/mnt/<share_name>", "Local folder where files will appear. Auto-derived from Source. Created automatically if missing."),
+                text_opt("Username", "", "your_username (or leave blank if guest/NFS)", "Username for password-protected shares. Leave blank for guest access or NFS shares."),
+                secret_opt("Password", "•••••••• (leave blank if guest/NFS)", "Password for the share. Stored safely in root-only /etc/disktui-credentials.*, NOT in plain text."),
+                toggle_opt("Guest access", extra.split(',').any(|o| o == "guest"), "Enable for public shares that do not require any username or password."),
+                toggle_opt("Mount now", fresh || share.as_ref().is_some_and(|s| s.mounted), "Immediately connect and mount this share right after saving."),
+                toggle_opt("Auto-connect", extra.contains("x-systemd.automount") || fresh, "Connects automatically on-demand whenever you open the folder in your file manager."),
+                toggle_opt("Don't block boot (nofail)", extra.contains("nofail") || fresh, "Prevents computer boot hangs if the server is sleeping, offline, or Wi-Fi is down."),
+                toggle_opt("Wait for network (_netdev)", extra.contains("_netdev") || fresh, "Tells Linux to wait until network connection is active before trying to mount."),
+                choice_opt("SMB version", ["default", "3.1.1", "3.0", "2.1"].map(str::to_string).to_vec(), &opt_of(&extra, "vers").unwrap_or_else(|| "default".into()), "SMB protocol dialect. 'default' auto-negotiates with modern servers. Use 3.0/2.1 only for legacy hardware."),
+                text_opt("Idle disconnect", &opt_of(&extra, "x-systemd.idle-timeout").unwrap_or_default(), "e.g. 60s or 5m (leave blank to stay connected)", "Disconnects automatically after inactivity to save bandwidth. Leave blank to stay connected."),
+                text_opt("Custom type", if ["cifs", "nfs", "nfs4", "fuse.sshfs"].contains(&protocol.as_str()) { "" } else { &protocol }, "e.g. cifs, nfs, sshfs, ceph", "Custom filesystem type identifier (only needed if Protocol is set to Custom)."),
+                text_opt("Credentials file", opt_of(&extra, "credentials").unwrap_or_default().as_str(), "/etc/samba/credentials (advanced alternative)", "Path to an existing credentials file on disk instead of entering password above."),
+                text_opt("SSH private key", opt_of(&extra, "IdentityFile").unwrap_or_default().as_str(), "/home/user/.ssh/id_ed25519", "Path to private SSH key file when using SSH / SSHFS key authentication."),
+                text_opt("Extra options", &extra, "e.g. ro,soft,uid=1000", "Additional comma-separated mount flags for advanced configuration."),
+                text_opt("Share ID tag", share.as_ref().map(|s| s.id.as_str()).unwrap_or(""), "Auto-generated from folder name", "Unique identifier tag written into fstab comment. Auto-generated if left blank."),
             ],
-            focus: 0,
+            focus: 1,
             id: FormId::Share,
         });
     }
@@ -1259,6 +1450,10 @@ impl App {
         if self.selected >= self.rows.len() {
             self.selected = self.rows.len().saturating_sub(1);
         }
+        let action_count = self.actions().len();
+        if self.action_index >= action_count {
+            self.action_index = action_count.saturating_sub(1);
+        }
     }
 
     pub fn reload_fstab(&mut self) {
@@ -1330,24 +1525,66 @@ fn op_label(op: &Op) -> &'static str {
 }
 
 fn text(label: &str, value: &str) -> Field {
-    Field { label: label.into(), value: value.into(), choices: Vec::new(), secret: false, toggle: false }
+    let cursor = value.chars().count();
+    Field { label: label.into(), value: value.into(), cursor, choices: Vec::new(), secret: false, toggle: false, required: false, placeholder: String::new(), hint: String::new() }
 }
 fn secret(label: &str) -> Field {
-    Field { label: label.into(), value: String::new(), choices: Vec::new(), secret: true, toggle: false }
+    Field { label: label.into(), value: String::new(), cursor: 0, choices: Vec::new(), secret: true, toggle: false, required: false, placeholder: String::new(), hint: String::new() }
 }
 fn toggle(label: &str, on: bool) -> Field {
-    Field { label: label.into(), value: if on { "yes".into() } else { "no".into() }, choices: Vec::new(), secret: false, toggle: true }
+    Field { label: label.into(), value: if on { "yes".into() } else { "no".into() }, cursor: 0, choices: Vec::new(), secret: false, toggle: true, required: false, placeholder: String::new(), hint: String::new() }
 }
 fn choice(label: &str, choices: Vec<String>, current: &str) -> Field {
     let value = if choices.iter().any(|c| c == current) { current.to_string() } else { choices.first().cloned().unwrap_or_default() };
-    Field { label: label.into(), value, choices, secret: false, toggle: false }
+    Field { label: label.into(), value, cursor: 0, choices, secret: false, toggle: false, required: false, placeholder: String::new(), hint: String::new() }
+}
+
+fn text_req(label: &str, value: &str, placeholder: &str, hint: &str) -> Field {
+    let cursor = value.chars().count();
+    Field { label: label.into(), value: value.into(), cursor, choices: Vec::new(), secret: false, toggle: false, required: true, placeholder: placeholder.into(), hint: hint.into() }
+}
+
+fn text_opt(label: &str, value: &str, placeholder: &str, hint: &str) -> Field {
+    let cursor = value.chars().count();
+    Field { label: label.into(), value: value.into(), cursor, choices: Vec::new(), secret: false, toggle: false, required: false, placeholder: placeholder.into(), hint: hint.into() }
+}
+
+fn secret_opt(label: &str, placeholder: &str, hint: &str) -> Field {
+    Field { label: label.into(), value: String::new(), cursor: 0, choices: Vec::new(), secret: true, toggle: false, required: false, placeholder: placeholder.into(), hint: hint.into() }
+}
+
+fn choice_req(label: &str, choices: Vec<String>, current: &str, hint: &str) -> Field {
+    let value = if choices.iter().any(|c| c == current) { current.to_string() } else { choices.first().cloned().unwrap_or_default() };
+    Field { label: label.into(), value, cursor: 0, choices, secret: false, toggle: false, required: true, placeholder: String::new(), hint: hint.into() }
+}
+
+fn choice_opt(label: &str, choices: Vec<String>, current: &str, hint: &str) -> Field {
+    let value = if choices.iter().any(|c| c == current) { current.to_string() } else { choices.first().cloned().unwrap_or_default() };
+    Field { label: label.into(), value, cursor: 0, choices, secret: false, toggle: false, required: false, placeholder: String::new(), hint: hint.into() }
+}
+
+fn toggle_opt(label: &str, on: bool, hint: &str) -> Field {
+    Field { label: label.into(), value: if on { "yes".into() } else { "no".into() }, cursor: 0, choices: Vec::new(), secret: false, toggle: true, required: false, placeholder: String::new(), hint: hint.into() }
 }
 
 fn yes(form: &Form, label: &str) -> bool {
     form.fields.iter().any(|f| f.label == label && f.value == "yes")
 }
+fn yes_or(form: &Form, labels: &[&str]) -> bool {
+    form.fields.iter().any(|f| labels.contains(&f.label.as_str()) && f.value == "yes")
+}
 fn val<'a>(form: &'a Form, label: &str) -> &'a str {
     form.fields.iter().find(|f| f.label == label).map(|f| f.value.as_str()).unwrap_or("")
+}
+fn val_or<'a>(form: &'a Form, labels: &[&str]) -> &'a str {
+    for label in labels {
+        if let Some(f) = form.fields.iter().find(|f| f.label == *label) {
+            if !f.value.is_empty() {
+                return &f.value;
+            }
+        }
+    }
+    ""
 }
 
 enum Build {
@@ -1568,27 +1805,44 @@ fn build(form: &Form, model: &Model, caps: &Caps, uid: u32, gid: u32, fstab_text
 }
 
 fn share_build(form: &Form, uid: u32, gid: u32, fstab_text: &str) -> Build {
-    let protocol = if val(form, "Protocol") == "custom" {
-        val(form, "Type").to_string()
-    } else {
-        val(form, "Protocol").to_string()
+    let raw_proto = val_or(form, &["Protocol"]);
+    let protocol = match raw_proto {
+        "Windows / NAS (SMB)" => "cifs".to_string(),
+        "Linux / UNIX (NFS)" => "nfs".to_string(),
+        "SSH / Server (SSHFS)" => "fuse.sshfs".to_string(),
+        "Custom" | "custom" => val_or(form, &["Custom type", "Type"]).to_string(),
+        other => other.to_string(),
     };
+    let source = val_or(form, &["Source"]).to_string();
+    if source.trim().is_empty() {
+        return Build::Err("Source is mandatory! Please enter the server and share address (e.g. \\\\server\\share or //192.168.1.50/photos).".into());
+    }
+    let mount_point = val_or(form, &["Mount point"]).to_string();
+    let guest = yes_or(form, &["Guest access", "Guest"]);
+    let username = val_or(form, &["Username"]).to_string();
+    let password = val_or(form, &["Password"]).to_string();
+    let credentials_file = val_or(form, &["Credentials file"]).to_string();
+
+    if !guest && !password.is_empty() && username.is_empty() && credentials_file.is_empty() {
+        return Build::Err("Please enter the Username to go with your password, or enable Guest access if no login is needed.".into());
+    }
+
     let draft = ShareDraft {
-        id: val(form, "Id").into(),
+        id: val_or(form, &["Share ID tag", "Id"]).into(),
         protocol,
-        source: val(form, "Source").into(),
-        mount_point: val(form, "Mount point").into(),
-        guest: yes(form, "Guest"),
-        username: val(form, "Username").into(),
-        password: val(form, "Password").into(),
-        credentials_file: val(form, "Credentials file").into(),
-        identity_file: val(form, "SSH identity").into(),
-        extra: val(form, "Extra options").into(),
-        netdev: yes(form, "_netdev"),
-        nofail: yes(form, "nofail"),
-        automount: yes(form, "Automount"),
-        idle_timeout: val(form, "Idle timeout").into(),
-        vers: val(form, "SMB version").into(),
+        source,
+        mount_point,
+        guest,
+        username,
+        password,
+        credentials_file,
+        identity_file: val_or(form, &["SSH private key", "SSH identity"]).into(),
+        extra: val_or(form, &["Extra options"]).into(),
+        netdev: yes_or(form, &["Wait for network (_netdev)", "_netdev"]),
+        nofail: yes_or(form, &["Don't block boot (nofail)", "nofail"]),
+        automount: yes_or(form, &["Auto-connect", "Automount"]),
+        idle_timeout: val_or(form, &["Idle disconnect", "Idle timeout"]).into(),
+        vers: val_or(form, &["SMB version"]).into(),
         uid,
         gid,
     };
@@ -1605,7 +1859,7 @@ fn share_build(form: &Form, uid: u32, gid: u32, fstab_text: &str) -> Build {
         target: plan.target.clone(),
         line: plan.entry_line,
     });
-    let mount = yes(form, "Mount now").then(|| plan.target);
+    let mount = yes_or(form, &["Mount now"]).then_some(plan.target);
     Build::Sudo(SudoJob::ApplyFstab { contents, creds: plan.credentials, mount })
 }
 
@@ -1651,5 +1905,160 @@ fn opt_of(options: &str, key: &str) -> Option<String> {
         let (k, v) = opt.split_once('=')?;
         (k == key).then(|| v.to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn make_test_app() -> App {
+        App::new(
+            Config::default(),
+            PathBuf::from("/tmp/test-disktui.toml"),
+            crate::theme::resolve("tokyo-night", None, None),
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn test_field_initial_cursor() {
+        let f = text("Test", "hello");
+        assert_eq!(f.cursor, 5);
+        assert_eq!(f.value, "hello");
+
+        let s = secret("Secret");
+        assert_eq!(s.cursor, 0);
+    }
+
+    #[test]
+    fn test_share_form_source_auto_derives_mount_point() {
+        let mut app = make_test_app();
+        app.open_share(true);
+
+        // In open_share(true), focus starts at field index 1 ("Source")
+        if let Dialog::Form(form) = &app.dialog {
+            assert_eq!(form.focus, 1);
+            assert_eq!(form.fields[1].label, "Source");
+            let mp = form.fields.iter().find(|f| f.label == "Mount point").unwrap();
+            assert_eq!(mp.value, "/mnt/");
+        } else {
+            panic!("expected form dialog");
+        }
+
+        // Simulate typing "\\server\shared_docs" into Source
+        for ch in "\\\\server\\shared_docs".chars() {
+            app.form_insert(ch);
+        }
+
+        if let Dialog::Form(form) = &app.dialog {
+            let src = form.fields.iter().find(|f| f.label == "Source").unwrap();
+            assert_eq!(src.value, "\\\\server\\shared_docs");
+            let mp = form.fields.iter().find(|f| f.label == "Mount point").unwrap();
+            // Should have auto-completed to /mnt/shared_docs!
+            assert_eq!(mp.value, "/mnt/shared_docs");
+        }
+    }
+
+    #[test]
+    fn test_form_cursor_and_editing_keys() {
+        let mut app = make_test_app();
+        app.dialog = Dialog::Form(Form {
+            title: "Test".into(),
+            blurb: "".into(),
+            fields: vec![text("Name", "quick brown fox")],
+            focus: 0,
+            id: FormId::LoopAttach,
+        });
+
+        // Initial cursor at end (15)
+        let key = |code, modifiers| KeyEvent::new(code, modifiers);
+        // Move Left 3 times (over "fox")
+        for _ in 0..3 {
+            app.key_form(key(KeyCode::Left, KeyModifiers::NONE));
+        }
+        if let Dialog::Form(form) = &app.dialog {
+            assert_eq!(form.fields[0].cursor, 12);
+        }
+
+        // Insert "red " at cursor 12 -> "quick brown red fox"
+        for ch in "red ".chars() {
+            app.key_form(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        if let Dialog::Form(form) = &app.dialog {
+            assert_eq!(form.fields[0].value, "quick brown red fox");
+        }
+
+        // Home key
+        app.key_form(key(KeyCode::Home, KeyModifiers::NONE));
+        if let Dialog::Form(form) = &app.dialog {
+            assert_eq!(form.fields[0].cursor, 0);
+        }
+
+        // Delete key (deletes 'q')
+        app.key_form(key(KeyCode::Delete, KeyModifiers::NONE));
+        if let Dialog::Form(form) = &app.dialog {
+            assert_eq!(form.fields[0].value, "uick brown red fox");
+        }
+
+        // End key
+        app.key_form(key(KeyCode::End, KeyModifiers::NONE));
+        if let Dialog::Form(form) = &app.dialog {
+            assert_eq!(form.fields[0].cursor, form.fields[0].value.chars().count());
+        }
+
+        // Ctrl+W (delete word "fox")
+        app.key_form(key(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        if let Dialog::Form(form) = &app.dialog {
+            assert_eq!(form.fields[0].value, "uick brown red ");
+        }
+
+        // Ctrl+U (clear to start)
+        app.key_form(key(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        if let Dialog::Form(form) = &app.dialog {
+            assert_eq!(form.fields[0].value, "");
+            assert_eq!(form.fields[0].cursor, 0);
+        }
+    }
+
+    #[test]
+    fn test_share_build_maps_friendly_protocol_name() {
+        let form = Form {
+            title: "Add network share".into(),
+            blurb: "".into(),
+            fields: vec![
+                choice("Protocol", vec!["Windows / NAS (SMB)".into()], "Windows / NAS (SMB)"),
+                text("Source", "//nas/storage"),
+                text("Mount point", "/mnt/storage"),
+                toggle("Guest", true),
+                text("Username", ""),
+                secret("Password"),
+                choice("SMB version", vec!["default".into()], "default"),
+                toggle("Mount now", true),
+                toggle("Automount", false),
+                text("Idle timeout", ""),
+                toggle("_netdev", true),
+                toggle("nofail", true),
+                text("Type", ""),
+                text("Credentials file", ""),
+                text("SSH identity", ""),
+                text("Extra options", ""),
+                text("Id", "test1"),
+            ],
+            focus: 0,
+            id: FormId::Share,
+        };
+
+        match share_build(&form, 1000, 1000, "") {
+            Build::Sudo(SudoJob::ApplyFstab { contents, mount, .. }) => {
+                assert!(contents.contains("//nas/storage /mnt/storage cifs"));
+                assert!(contents.contains("guest"));
+                assert_eq!(mount, Some("/mnt/storage".to_string()));
+            }
+            other => panic!("expected Build::Sudo, got {:?}", matches!(other, Build::Err(_))),
+        }
+    }
 }
 
