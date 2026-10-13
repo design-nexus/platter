@@ -6,9 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::Config;
 use crate::fstab::{self, Change, Share, ShareDraft};
-use crate::model::{
-    self, ActionId, Block, Caps, Model, PropVal, Row, RowKind, PART_TYPES,
-};
+use crate::model::{self, ActionId, Block, Caps, Model, PropVal, Row, RowKind, PART_TYPES};
 use crate::msg::{Msg, Progress};
 use crate::op::{self, Op};
 use crate::privilege::SudoJob;
@@ -49,8 +47,12 @@ pub struct Form {
 }
 
 pub enum FormId {
-    Format { path: String },
-    FormatDisk { path: String },
+    Format {
+        path: String,
+    },
+    FormatDisk {
+        path: String,
+    },
     Create {
         disk: String,
         offset: u64,
@@ -64,22 +66,55 @@ pub enum FormId {
         mounted: bool,
         fstype: String,
     },
-    Label { path: String, swap: bool },
-    MountOptions { path: String },
-    Unlock { path: String },
-    ChangePass { path: String },
-    EditPartition { path: String, table: String },
-    Image { path: String, size: u64, restore: bool },
-    Benchmark { path: String, size: u64 },
-    DriveSettings { path: String },
+    Label {
+        path: String,
+        swap: bool,
+    },
+    MountOptions {
+        path: String,
+    },
+    Unlock {
+        path: String,
+    },
+    ChangePass {
+        path: String,
+    },
+    EditPartition {
+        path: String,
+        table: String,
+    },
+    Image {
+        path: String,
+        size: u64,
+        restore: bool,
+    },
+    Benchmark {
+        path: String,
+        size: u64,
+    },
+    DriveSettings {
+        path: String,
+    },
     RaidCreate,
     Share,
     LoopAttach,
-    Header { path: String, restore: bool },
-    SmartTest { path: String, nvme: bool },
-    Sanitize { path: String },
-    SecureErase { path: String },
-    Convert { path: String },
+    Header {
+        path: String,
+        restore: bool,
+    },
+    SmartTest {
+        path: String,
+        nvme: bool,
+    },
+    Sanitize {
+        path: String,
+    },
+    SecureErase {
+        path: String,
+    },
+    Convert {
+        path: String,
+    },
 }
 
 pub struct Confirm {
@@ -97,10 +132,16 @@ pub enum Dialog {
     None,
     Form(Form),
     Confirm(Confirm),
-    Text { title: String, body: String, scroll: u16 },
+    Text {
+        title: String,
+        body: String,
+        scroll: u16,
+    },
 }
 
 pub struct App {
+    pub detail_scroll: u16,
+    pub commands: crate::commands::Palette,
     pub config: Config,
     pub config_path: PathBuf,
     pub theme: Theme,
@@ -136,6 +177,25 @@ pub struct App {
 }
 
 impl App {
+    pub fn command_actions(&self) -> Vec<crate::commands::Action> {
+        let mut actions: Vec<_> = self
+            .actions()
+            .iter()
+            .enumerate()
+            .map(|(index, action)| crate::commands::Action {
+                label: action.id.label(),
+                key: KeyCode::F(index as u8),
+                modifiers: KeyModifiers::NONE,
+            })
+            .collect();
+        actions.extend_from_slice(ACTIONS);
+        actions
+    }
+
+    fn apply_aurora_theme(&mut self, id: &str) {
+        self.apply_theme(id);
+    }
+
     pub fn new(
         config: Config,
         config_path: PathBuf,
@@ -146,6 +206,8 @@ impl App {
     ) -> Self {
         let (uid, gid) = util::current_ids();
         let mut app = Self {
+            commands: crate::commands::Palette::default(),
+            detail_scroll: 0,
             config,
             config_path,
             theme,
@@ -246,7 +308,9 @@ impl App {
 
     pub fn on_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL)
-            && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('q') || key.code == KeyCode::Char('w'))
+            && (key.code == KeyCode::Char('c')
+                || key.code == KeyCode::Char('q')
+                || key.code == KeyCode::Char('w'))
         {
             self.quit = true;
             return;
@@ -268,10 +332,52 @@ impl App {
     }
 
     fn key_main(&mut self, key: KeyEvent) {
-        if key.code == KeyCode::Esc && self.progress.as_ref().is_some_and(|progress| progress.cancel) {
+        if self.commands.open
+            || (key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL))
+        {
+            let actions = self.command_actions();
+            if let Some(action) = self.commands.handle(key, &actions) {
+                if action.modifiers == KeyModifiers::ALT {
+                    let id = match action.key {
+                        KeyCode::Char('o') => "omarchy",
+                        KeyCode::Char('t') => "terminal",
+                        _ => "aurora",
+                    };
+                    self.apply_aurora_theme(id);
+                } else if let KeyCode::F(index) = action.key {
+                    if let Some(action) = self.actions().get(index as usize).cloned() {
+                        if action.enabled {
+                            self.open_action(action.id);
+                        } else {
+                            self.error = action.reason;
+                        }
+                    }
+                } else {
+                    self.key_main(action.event());
+                }
+            }
+            return;
+        }
+        if key.code == KeyCode::Esc
+            && self
+                .progress
+                .as_ref()
+                .is_some_and(|progress| progress.cancel)
+        {
             self.cancel.store(true, Ordering::Relaxed);
             self.info = "Cancelling…".into();
             return;
+        }
+        match key.code {
+            KeyCode::PageDown => {
+                self.detail_scroll = self.detail_scroll.saturating_add(5);
+                return;
+            }
+            KeyCode::PageUp => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(5);
+                return;
+            }
+            _ => {}
         }
         match key.code {
             KeyCode::Char('q') => self.quit = true,
@@ -282,7 +388,9 @@ impl App {
             }
             KeyCode::Char('n') if self.focus == Focus::Shares => self.open_share(true),
             KeyCode::Char('e') if self.focus == Focus::Shares => self.open_share(false),
-            KeyCode::Char('d') | KeyCode::Delete if self.focus == Focus::Shares => self.delete_share(),
+            KeyCode::Char('d') | KeyCode::Delete if self.focus == Focus::Shares => {
+                self.delete_share()
+            }
             KeyCode::Char('1') => {
                 self.focus = Focus::Devices;
                 if matches!(self.current_kind(), Some(RowKind::Shares)) {
@@ -309,7 +417,11 @@ impl App {
         let shares = matches!(self.current_kind(), Some(RowKind::Shares));
         let forward = dir > 0;
         self.focus = if !shares {
-            if self.focus == Focus::Devices { Focus::Actions } else { Focus::Devices }
+            if self.focus == Focus::Devices {
+                Focus::Actions
+            } else {
+                Focus::Devices
+            }
         } else {
             match (self.focus, forward) {
                 (Focus::Devices, true) | (Focus::Actions, false) => Focus::Shares,
@@ -346,6 +458,7 @@ impl App {
                 }
                 self.selected = slide(self.selected, self.rows.len(), dir);
                 self.action_index = 0;
+                self.detail_scroll = 0;
             }
         }
     }
@@ -387,7 +500,11 @@ impl App {
     }
 
     fn shortcut(&mut self, ch: char) {
-        let Some(action) = self.actions().into_iter().find(|action| action.id.key() == ch.to_string() && !action.id.key().is_empty()) else {
+        let Some(action) = self
+            .actions()
+            .into_iter()
+            .find(|action| action.id.key() == ch.to_string() && !action.id.key().is_empty())
+        else {
             return;
         };
         if action.enabled {
@@ -450,12 +567,20 @@ impl App {
                 }
             }
             KeyCode::Backspace => {
-                let field = if confirm.which == 0 { &mut confirm.typed } else { &mut confirm.ack };
+                let field = if confirm.which == 0 {
+                    &mut confirm.typed
+                } else {
+                    &mut confirm.ack
+                };
                 field.pop();
             }
             KeyCode::Enter => self.submit_confirm(),
             KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let field = if confirm.which == 0 { &mut confirm.typed } else { &mut confirm.ack };
+                let field = if confirm.which == 0 {
+                    &mut confirm.typed
+                } else {
+                    &mut confirm.ack
+                };
                 field.push(ch);
             }
             _ => {}
@@ -495,7 +620,9 @@ impl App {
         let len = theme::CHOICES.len();
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.picking_theme = false,
-            KeyCode::Char('j') | KeyCode::Down => self.theme_index = slide(self.theme_index, len, 1),
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.theme_index = slide(self.theme_index, len, 1)
+            }
             KeyCode::Char('k') | KeyCode::Up => self.theme_index = slide(self.theme_index, len, -1),
             KeyCode::Enter => {
                 if let Some(choice) = theme::CHOICES.get(self.theme_index) {
@@ -539,7 +666,11 @@ impl App {
             self.omarchy = Some(theme);
         }
         self.custom = theme::load_user_theme();
-        self.theme = theme::resolve(&self.config.theme, self.omarchy.as_ref(), self.custom.as_ref());
+        self.theme = theme::resolve(
+            &self.config.theme,
+            self.omarchy.as_ref(),
+            self.custom.as_ref(),
+        );
     }
 
     pub fn actions(&self) -> Vec<model::Action> {
@@ -548,8 +679,24 @@ impl App {
             let is_mounted = self.shares.get(self.share_index).is_some_and(|s| s.mounted);
             return vec![
                 share_action(ActionId::NewShare, true, ""),
-                share_action(ActionId::MountShare, has && !is_mounted, if is_mounted { "Already connected" } else { "No share selected" }),
-                share_action(ActionId::UnmountShare, has && is_mounted, if !is_mounted { "Not connected" } else { "No share selected" }),
+                share_action(
+                    ActionId::MountShare,
+                    has && !is_mounted,
+                    if is_mounted {
+                        "Already connected"
+                    } else {
+                        "No share selected"
+                    },
+                ),
+                share_action(
+                    ActionId::UnmountShare,
+                    has && is_mounted,
+                    if !is_mounted {
+                        "Not connected"
+                    } else {
+                        "No share selected"
+                    },
+                ),
                 share_action(ActionId::EditShare, has, "No share selected"),
                 share_action(ActionId::RemoveShare, has, "No share selected"),
             ];
@@ -584,7 +731,10 @@ impl App {
             }
             ActionId::Unmount => {
                 if let Some(block) = block {
-                    self.queue(Op::Unmount { path: block.path, force: false });
+                    self.queue(Op::Unmount {
+                        path: block.path,
+                        force: false,
+                    });
                 }
             }
             ActionId::SwapOn => {
@@ -648,7 +798,10 @@ impl App {
             }
             ActionId::RaidStart => {
                 if let Some(RowKind::Raid { raid }) = kind {
-                    self.queue(Op::RaidStart { path: raid, degraded: true });
+                    self.queue(Op::RaidStart {
+                        path: raid,
+                        degraded: true,
+                    });
                 }
             }
             ActionId::RaidStop => {
@@ -699,11 +852,15 @@ impl App {
     fn confirm_current(&mut self, id: ActionId) {
         let op = match id {
             ActionId::Delete => {
-                let Some(block) = self.current_block() else { return };
+                let Some(block) = self.current_block() else {
+                    return;
+                };
                 Op::DeletePartition { path: block.path }
             }
             ActionId::RaidDelete => {
-                let Some(RowKind::Raid { raid }) = self.current_kind() else { return };
+                let Some(RowKind::Raid { raid }) = self.current_kind() else {
+                    return;
+                };
                 Op::RaidDelete(raid)
             }
             _ => return,
@@ -713,9 +870,16 @@ impl App {
 
     fn confirm_op(&mut self, title: &str, body: &str, op: Op) {
         let kind = self.current_kind();
-        let kernel = kind.as_ref().map(|k| self.model.confirm_name(k)).unwrap_or_default();
+        let kernel = kind
+            .as_ref()
+            .map(|k| self.model.confirm_name(k))
+            .unwrap_or_default();
         let system = kind.as_ref().is_some_and(|k| self.model.row_is_system(k));
-        let kernel = if kernel.is_empty() { "raid".into() } else { kernel };
+        let kernel = if kernel.is_empty() {
+            "raid".into()
+        } else {
+            kernel
+        };
         self.dialog = Dialog::Confirm(Confirm {
             title: title.into(),
             body: body.into(),
@@ -729,8 +893,15 @@ impl App {
     }
 
     fn submit_confirm(&mut self) {
-        let Dialog::Confirm(confirm) = &self.dialog else { return };
-        let ok = model::confirm_ok(&confirm.kernel, &confirm.typed, confirm.system, &confirm.ack);
+        let Dialog::Confirm(confirm) = &self.dialog else {
+            return;
+        };
+        let ok = model::confirm_ok(
+            &confirm.kernel,
+            &confirm.typed,
+            confirm.system,
+            &confirm.ack,
+        );
         if !ok {
             self.error = if confirm.system {
                 format!("Type {} and then system.", confirm.kernel)
@@ -751,28 +922,54 @@ impl App {
             return;
         };
         let kinds: Vec<String> = if disk {
-            ["gpt", "dos", "empty"].into_iter().map(str::to_string).collect()
+            ["gpt", "dos", "empty"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
         } else {
             model::FS_TYPES.iter().map(|s| (*s).to_string()).collect()
         };
         self.dialog = Dialog::Form(Form {
-            title: if disk { "Format disk".into() } else { "Format".into() },
+            title: if disk {
+                "Format disk".into()
+            } else {
+                "Format".into()
+            },
             blurb: format!(
                 "{}  {}  {}",
                 kernel_name(block.device_path()),
                 human_size(block.size),
-                if self.model.is_system_tree(&block.path) { "This is a system disk." } else { "" }
+                if self.model.is_system_tree(&block.path) {
+                    "This is a system disk."
+                } else {
+                    ""
+                }
             ),
             fields: vec![
                 choice("Type", kinds, if disk { "gpt" } else { "ext4" }),
                 text("Label", &block.id_label),
-                choice("Erase", ["none", "zero", "ata-secure-erase", "ata-secure-erase-enhanced"].map(str::to_string).to_vec(), "none"),
+                choice(
+                    "Erase",
+                    [
+                        "none",
+                        "zero",
+                        "ata-secure-erase",
+                        "ata-secure-erase-enhanced",
+                    ]
+                    .map(str::to_string)
+                    .to_vec(),
+                    "none",
+                ),
                 toggle("Encrypt with LUKS2", false),
                 secret("Passphrase"),
                 toggle("Take ownership", true),
             ],
             focus: 0,
-            id: if disk { FormId::FormatDisk { path: block.path } } else { FormId::Format { path: block.path } },
+            id: if disk {
+                FormId::FormatDisk { path: block.path }
+            } else {
+                FormId::Format { path: block.path }
+            },
         });
     }
 
@@ -784,8 +981,15 @@ impl App {
                     self.error = "This drive has no whole-disk device.".into();
                     return;
                 };
-                let Some(free) = self.model.segments_for(&block.path).into_iter().find(|s| s.free) else {
-                    self.error = "No free space. Format a partition table first if the disk is empty.".into();
+                let Some(free) = self
+                    .model
+                    .segments_for(&block.path)
+                    .into_iter()
+                    .find(|s| s.free)
+                else {
+                    self.error =
+                        "No free space. Format a partition table first if the disk is empty."
+                            .into();
                     return;
                 };
                 (block.path.clone(), free.start, free.size)
@@ -795,13 +999,21 @@ impl App {
                 return;
             }
         };
-        let table = self.model.block(&disk).and_then(|b| b.table.as_ref().map(|t| t.kind.clone())).unwrap_or_else(|| "gpt".into());
+        let table = self
+            .model
+            .block(&disk)
+            .and_then(|b| b.table.as_ref().map(|t| t.kind.clone()))
+            .unwrap_or_else(|| "gpt".into());
         let labels: Vec<String> = PART_TYPES.iter().map(|t| t.label.to_string()).collect();
         let mut fs: Vec<String> = model::FS_TYPES.iter().map(|s| (*s).to_string()).collect();
         fs.insert(0, "none".into());
         self.dialog = Dialog::Form(Form {
             title: "Create partition".into(),
-            blurb: format!("Free space {} at offset {}.", human_size(max), human_size(offset)),
+            blurb: format!(
+                "Free space {} at offset {}.",
+                human_size(max),
+                human_size(offset)
+            ),
             fields: vec![
                 text("Size (blank = all)", ""),
                 text("Name", ""),
@@ -812,13 +1024,24 @@ impl App {
                 secret("Passphrase"),
             ],
             focus: 0,
-            id: FormId::Create { disk, offset, max, table },
+            id: FormId::Create {
+                disk,
+                offset,
+                max,
+                table,
+            },
         });
     }
 
     fn form_resize(&mut self) {
-        let Some(block) = self.current_block() else { return };
-        let current = block.partition.as_ref().map(|p| p.size).unwrap_or(block.size);
+        let Some(block) = self.current_block() else {
+            return;
+        };
+        let current = block
+            .partition
+            .as_ref()
+            .map(|p| p.size)
+            .unwrap_or(block.size);
         self.dialog = Dialog::Form(Form {
             title: "Resize".into(),
             blurb: format!("Current size {}. 0 or max uses the largest fit. Shrinking a filesystem moves data.", human_size(current)),
@@ -835,22 +1058,35 @@ impl App {
     }
 
     fn form_label(&mut self) {
-        let Some(block) = self.current_block() else { return };
+        let Some(block) = self.current_block() else {
+            return;
+        };
         self.dialog = Dialog::Form(Form {
             title: "Label".into(),
             blurb: String::new(),
             fields: vec![text("Label", &block.id_label)],
             focus: 0,
-            id: FormId::Label { path: block.path, swap: block.swap },
+            id: FormId::Label {
+                path: block.path,
+                swap: block.swap,
+            },
         });
     }
 
     fn form_mount_options(&mut self) {
-        let Some(block) = self.current_block() else { return };
+        let Some(block) = self.current_block() else {
+            return;
+        };
         let existing = block.fstab_items().into_iter().next();
-        let dir = existing.map(|item| model::fstab_field(item, "dir")).unwrap_or_default();
-        let opts = existing.map(|item| model::fstab_field(item, "opts")).unwrap_or_else(|| "defaults".into());
-        let pass = existing.map(|item| model::fstab_field(item, "passno")).unwrap_or_else(|| "2".into());
+        let dir = existing
+            .map(|item| model::fstab_field(item, "dir"))
+            .unwrap_or_default();
+        let opts = existing
+            .map(|item| model::fstab_field(item, "opts"))
+            .unwrap_or_else(|| "defaults".into());
+        let pass = existing
+            .map(|item| model::fstab_field(item, "passno"))
+            .unwrap_or_else(|| "2".into());
         let startup = existing.is_some();
         self.dialog = Dialog::Form(Form {
             title: "Mount options".into(),
@@ -859,7 +1095,11 @@ impl App {
                 toggle("Mount at startup", startup),
                 text("Mount point", &dir),
                 text("Options", &opts),
-                choice("Identify by", ["UUID", "LABEL"].map(str::to_string).to_vec(), "UUID"),
+                choice(
+                    "Identify by",
+                    ["UUID", "LABEL"].map(str::to_string).to_vec(),
+                    "UUID",
+                ),
                 text("fsck pass", &pass),
             ],
             focus: 0,
@@ -868,7 +1108,9 @@ impl App {
     }
 
     fn form_unlock(&mut self) {
-        let Some(block) = self.current_block() else { return };
+        let Some(block) = self.current_block() else {
+            return;
+        };
         self.dialog = Dialog::Form(Form {
             title: "Unlock".into(),
             blurb: kernel_name(block.device_path()).into(),
@@ -879,7 +1121,9 @@ impl App {
     }
 
     fn form_pass(&mut self) {
-        let Some(block) = self.current_block() else { return };
+        let Some(block) = self.current_block() else {
+            return;
+        };
         self.dialog = Dialog::Form(Form {
             title: "Change passphrase".into(),
             blurb: String::new(),
@@ -890,15 +1134,18 @@ impl App {
     }
 
     fn form_edit_partition(&mut self) {
-        let Some(block) = self.current_block() else { return };
+        let Some(block) = self.current_block() else {
+            return;
+        };
         let Some(part) = &block.partition else { return };
-        let table = self.model.block(&part.table).and_then(|d| d.table.as_ref().map(|t| t.kind.clone())).unwrap_or_else(|| "gpt".into());
+        let table = self
+            .model
+            .block(&part.table)
+            .and_then(|d| d.table.as_ref().map(|t| t.kind.clone()))
+            .unwrap_or_else(|| "gpt".into());
         let labels: Vec<String> = PART_TYPES.iter().map(|t| t.label.to_string()).collect();
         let current = model::partition_type_label(&part.type_code);
-        let mut fields = vec![
-            choice("Type", labels, &current),
-            text("Name", &part.name),
-        ];
+        let mut fields = vec![choice("Type", labels, &current), text("Name", &part.name)];
         if table == "dos" {
             fields.push(toggle("Bootable", part.flags & (1 << 7) != 0));
         } else {
@@ -912,29 +1159,55 @@ impl App {
             blurb: format!("Current type {}", part.type_code),
             fields,
             focus: 0,
-            id: FormId::EditPartition { path: block.path, table },
+            id: FormId::EditPartition {
+                path: block.path,
+                table,
+            },
         });
     }
 
     fn form_benchmark(&mut self) {
-        let Some(block) = self.current_block() else { return };
+        let Some(block) = self.current_block() else {
+            return;
+        };
         self.dialog = Dialog::Form(Form {
             title: "Benchmark".into(),
             blurb: "Read walks the device. Write destroys its contents.".into(),
-            fields: vec![choice("Mode", ["read", "write"].map(str::to_string).to_vec(), "read")],
+            fields: vec![choice(
+                "Mode",
+                ["read", "write"].map(str::to_string).to_vec(),
+                "read",
+            )],
             focus: 0,
-            id: FormId::Benchmark { path: block.path, size: block.size },
+            id: FormId::Benchmark {
+                path: block.path,
+                size: block.size,
+            },
         });
     }
 
     fn form_image(&mut self, restore: bool) {
-        let Some(block) = self.current_block() else { return };
+        let Some(block) = self.current_block() else {
+            return;
+        };
         self.dialog = Dialog::Form(Form {
-            title: if restore { "Restore disk image".into() } else { "Create disk image".into() },
-            blurb: format!("{}  {}", kernel_name(block.device_path()), human_size(block.size)),
+            title: if restore {
+                "Restore disk image".into()
+            } else {
+                "Create disk image".into()
+            },
+            blurb: format!(
+                "{}  {}",
+                kernel_name(block.device_path()),
+                human_size(block.size)
+            ),
             fields: vec![text("Image file", "")],
             focus: 0,
-            id: FormId::Image { path: block.path, size: block.size, restore },
+            id: FormId::Image {
+                path: block.path,
+                size: block.size,
+                restore,
+            },
         });
     }
 
@@ -944,31 +1217,47 @@ impl App {
             return;
         };
         self.smart_target = Some((drive.path.clone(), drive.nvme));
-        self.queue(Op::Smart { path: drive.nvme_path, nvme: drive.nvme });
+        self.queue(Op::Smart {
+            path: drive.nvme_path,
+            nvme: drive.nvme,
+        });
     }
 
     fn form_smart_test(&mut self) {
-        let Some(drive) = self.current_drive() else { return };
+        let Some(drive) = self.current_drive() else {
+            return;
+        };
         let kinds: Vec<String> = if drive.nvme {
-            ["short", "extended", "vendor-specific"].map(str::to_string).to_vec()
+            ["short", "extended", "vendor-specific"]
+                .map(str::to_string)
+                .to_vec()
         } else {
-            ["short", "extended", "conveyance", "offline"].map(str::to_string).to_vec()
+            ["short", "extended", "conveyance", "offline"]
+                .map(str::to_string)
+                .to_vec()
         };
         self.dialog = Dialog::Form(Form {
             title: "SMART self-test".into(),
             blurb: "The test runs on the drive and returns immediately.".into(),
             fields: vec![choice("Test", kinds, "short")],
             focus: 0,
-            id: FormId::SmartTest { path: drive.path, nvme: drive.nvme },
+            id: FormId::SmartTest {
+                path: drive.path,
+                nvme: drive.nvme,
+            },
         });
     }
 
     fn form_drive(&mut self) {
-        let Some(drive) = self.current_drive() else { return };
+        let Some(drive) = self.current_drive() else {
+            return;
+        };
         let standby = drive_int(&drive.config, "ata-pm-standby");
         let apm = drive_int(&drive.config, "ata-apm-level");
-        let cache = drive_bool(&drive.config, "ata-write-cache-enabled").unwrap_or(drive.ata.as_ref().is_some_and(|a| a.write_cache_enabled));
-        let look = drive_bool(&drive.config, "ata-read-lookahead-enabled").unwrap_or(drive.ata.as_ref().is_some_and(|a| a.lookahead_enabled));
+        let cache = drive_bool(&drive.config, "ata-write-cache-enabled")
+            .unwrap_or(drive.ata.as_ref().is_some_and(|a| a.write_cache_enabled));
+        let look = drive_bool(&drive.config, "ata-read-lookahead-enabled")
+            .unwrap_or(drive.ata.as_ref().is_some_and(|a| a.lookahead_enabled));
         self.dialog = Dialog::Form(Form {
             title: "Drive settings".into(),
             blurb: "Standby is in seconds. 0 disables spindown. APM is 1–254.".into(),
@@ -994,11 +1283,19 @@ impl App {
     }
 
     fn form_secure_erase(&mut self) {
-        let Some(drive) = self.current_drive() else { return };
-        let minutes = drive.ata.as_ref().map(|a| a.secure_erase_minutes).unwrap_or(0);
+        let Some(drive) = self.current_drive() else {
+            return;
+        };
+        let minutes = drive
+            .ata
+            .as_ref()
+            .map(|a| a.secure_erase_minutes)
+            .unwrap_or(0);
         self.dialog = Dialog::Form(Form {
             title: "Secure erase".into(),
-            blurb: format!("ATA secure erase takes about {minutes} minutes and destroys every byte."),
+            blurb: format!(
+                "ATA secure erase takes about {minutes} minutes and destroys every byte."
+            ),
             fields: vec![toggle("Enhanced erase", false)],
             focus: 0,
             id: FormId::SecureErase { path: drive.path },
@@ -1006,17 +1303,23 @@ impl App {
     }
 
     fn form_sanitize(&mut self) {
-        let Some(drive) = self.current_drive() else { return };
+        let Some(drive) = self.current_drive() else {
+            return;
+        };
         self.dialog = Dialog::Form(Form {
             title: "NVMe sanitize".into(),
             blurb: "Sanitize cannot be aborted once it starts.".into(),
             fields: vec![choice(
                 "Action",
-                ["block-erase", "crypto-erase", "overwrite"].map(str::to_string).to_vec(),
+                ["block-erase", "crypto-erase", "overwrite"]
+                    .map(str::to_string)
+                    .to_vec(),
                 "block-erase",
             )],
             focus: 0,
-            id: FormId::Sanitize { path: drive.nvme_path },
+            id: FormId::Sanitize {
+                path: drive.nvme_path,
+            },
         });
     }
 
@@ -1036,40 +1339,72 @@ impl App {
     }
 
     fn form_header(&mut self, restore: bool) {
-        let Some(block) = self.current_block() else { return };
+        let Some(block) = self.current_block() else {
+            return;
+        };
         self.dialog = Dialog::Form(Form {
-            title: if restore { "Restore LUKS header".into() } else { "Back up LUKS header".into() },
+            title: if restore {
+                "Restore LUKS header".into()
+            } else {
+                "Back up LUKS header".into()
+            },
             blurb: "The file holds the header and keyslots.".into(),
             fields: vec![text("File", "")],
             focus: 0,
-            id: FormId::Header { path: block.path, restore },
+            id: FormId::Header {
+                path: block.path,
+                restore,
+            },
         });
     }
 
     fn form_convert(&mut self) {
-        let Some(block) = self.current_block() else { return };
+        let Some(block) = self.current_block() else {
+            return;
+        };
         self.dialog = Dialog::Form(Form {
             title: "Convert LUKS".into(),
             blurb: "The volume must be locked.".into(),
-            fields: vec![choice("Version", ["luks2", "luks1"].map(str::to_string).to_vec(), "luks2")],
+            fields: vec![choice(
+                "Version",
+                ["luks2", "luks1"].map(str::to_string).to_vec(),
+                "luks2",
+            )],
             focus: 0,
             id: FormId::Convert { path: block.path },
         });
     }
 
     fn submit_form(&mut self) {
-        let Dialog::Form(form) = &self.dialog else { return };
-        let built = build(form, &self.model, &self.caps, self.uid, self.gid, &self.fstab);
+        let Dialog::Form(form) = &self.dialog else {
+            return;
+        };
+        let built = build(
+            form,
+            &self.model,
+            &self.caps,
+            self.uid,
+            self.gid,
+            &self.fstab,
+        );
         match built {
             Build::Err(text) => self.error = text,
             Build::Op(op) => {
                 self.dialog = Dialog::None;
                 self.queue(op);
             }
-            Build::Confirm { title, body, op, kernel, system } => {
+            Build::Confirm {
+                title,
+                body,
+                op,
+                kernel,
+                system,
+            } => {
                 let kind = self.current_kind();
                 let mut kernel = if kernel.is_empty() {
-                    kind.as_ref().map(|k| self.model.confirm_name(k)).unwrap_or_default()
+                    kind.as_ref()
+                        .map(|k| self.model.confirm_name(k))
+                        .unwrap_or_default()
                 } else {
                     kernel
                 };
@@ -1104,21 +1439,45 @@ impl App {
         self.busy = true;
         self.cancel = Arc::new(AtomicBool::new(false));
         let op = match op {
-            Op::Benchmark { path, write, size, .. } => {
+            Op::Benchmark {
+                path, write, size, ..
+            } => {
                 self.samples.clear();
-                Op::Benchmark { path, write, size, cancel: Arc::clone(&self.cancel) }
+                Op::Benchmark {
+                    path,
+                    write,
+                    size,
+                    cancel: Arc::clone(&self.cancel),
+                }
             }
-            Op::Backup { path, file, size, .. } => {
+            Op::Backup {
+                path, file, size, ..
+            } => {
                 self.samples.clear();
-                Op::Backup { path, file, size, cancel: Arc::clone(&self.cancel) }
+                Op::Backup {
+                    path,
+                    file,
+                    size,
+                    cancel: Arc::clone(&self.cancel),
+                }
             }
-            Op::Restore { path, file, size, .. } => {
+            Op::Restore {
+                path, file, size, ..
+            } => {
                 self.samples.clear();
-                Op::Restore { path, file, size, cancel: Arc::clone(&self.cancel) }
+                Op::Restore {
+                    path,
+                    file,
+                    size,
+                    cancel: Arc::clone(&self.cancel),
+                }
             }
             other => other,
         };
-        let cancel = matches!(op, Op::Benchmark { .. } | Op::Backup { .. } | Op::Restore { .. });
+        let cancel = matches!(
+            op,
+            Op::Benchmark { .. } | Op::Backup { .. } | Op::Restore { .. }
+        );
         self.progress = Some(Progress {
             label: op_label(&op).into(),
             ratio: -1.0,
@@ -1128,8 +1487,12 @@ impl App {
     }
 
     fn form_move(&mut self, dir: i32) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
-        if form.fields.is_empty() { return; }
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
+        if form.fields.is_empty() {
+            return;
+        }
         form.focus = slide(form.focus, form.fields.len(), dir);
         if let Some(field) = form.fields.get_mut(form.focus) {
             field.cursor = field.value.chars().count();
@@ -1137,20 +1500,36 @@ impl App {
     }
 
     fn form_cycle(&mut self, dir: i32) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
-        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
+        let Some(field) = form.fields.get_mut(form.focus) else {
+            return;
+        };
         if field.toggle {
-            field.value = if field.value == "yes" { "no".into() } else { "yes".into() };
+            field.value = if field.value == "yes" {
+                "no".into()
+            } else {
+                "yes".into()
+            };
         } else if !field.choices.is_empty() {
-            let index = field.choices.iter().position(|c| c == &field.value).unwrap_or(0);
+            let index = field
+                .choices
+                .iter()
+                .position(|c| c == &field.value)
+                .unwrap_or(0);
             let next = slide(index, field.choices.len(), dir);
             field.value = field.choices[next].clone();
         }
     }
 
     fn form_left(&mut self) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
-        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
+        let Some(field) = form.fields.get_mut(form.focus) else {
+            return;
+        };
         if field.toggle || !field.choices.is_empty() {
             self.form_cycle(-1);
         } else if field.cursor > 0 {
@@ -1159,8 +1538,12 @@ impl App {
     }
 
     fn form_right(&mut self) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
-        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
+        let Some(field) = form.fields.get_mut(form.focus) else {
+            return;
+        };
         if field.toggle || !field.choices.is_empty() {
             self.form_cycle(1);
         } else {
@@ -1172,21 +1555,33 @@ impl App {
     }
 
     fn form_home(&mut self) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
-        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
+        let Some(field) = form.fields.get_mut(form.focus) else {
+            return;
+        };
         field.cursor = 0;
     }
 
     fn form_end(&mut self) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
-        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
+        let Some(field) = form.fields.get_mut(form.focus) else {
+            return;
+        };
         field.cursor = field.value.chars().count();
     }
 
     fn form_delete(&mut self) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
         let is_share = matches!(form.id, FormId::Share);
-        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        let Some(field) = form.fields.get_mut(form.focus) else {
+            return;
+        };
         if field.toggle || !field.choices.is_empty() {
             return;
         }
@@ -1196,7 +1591,11 @@ impl App {
             chars.remove(field.cursor);
             field.value = chars.into_iter().collect();
         }
-        let new_source = if is_source { Some(field.value.clone()) } else { None };
+        let new_source = if is_source {
+            Some(field.value.clone())
+        } else {
+            None
+        };
 
         if let Some(src) = new_source {
             if let Some(share_name) = fstab::extract_share_name(&src) {
@@ -1211,8 +1610,12 @@ impl App {
     }
 
     fn form_clear_to_start(&mut self) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
-        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
+        let Some(field) = form.fields.get_mut(form.focus) else {
+            return;
+        };
         if field.toggle || !field.choices.is_empty() {
             return;
         }
@@ -1224,8 +1627,12 @@ impl App {
     }
 
     fn form_delete_word(&mut self) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
-        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
+        let Some(field) = form.fields.get_mut(form.focus) else {
+            return;
+        };
         if field.toggle || !field.choices.is_empty() || field.cursor == 0 {
             return;
         }
@@ -1245,7 +1652,10 @@ impl App {
 
     fn form_space(&mut self) {
         let choice = match &self.dialog {
-            Dialog::Form(form) => form.fields.get(form.focus).is_some_and(|field| field.toggle || !field.choices.is_empty()),
+            Dialog::Form(form) => form
+                .fields
+                .get(form.focus)
+                .is_some_and(|field| field.toggle || !field.choices.is_empty()),
             _ => false,
         };
         if choice {
@@ -1256,9 +1666,13 @@ impl App {
     }
 
     fn form_insert(&mut self, ch: char) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
         let is_share = matches!(form.id, FormId::Share);
-        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        let Some(field) = form.fields.get_mut(form.focus) else {
+            return;
+        };
         if field.toggle || !field.choices.is_empty() {
             return;
         }
@@ -1268,7 +1682,11 @@ impl App {
         chars.insert(idx, ch);
         field.value = chars.into_iter().collect();
         field.cursor = idx + 1;
-        let new_source = if is_source { Some(field.value.clone()) } else { None };
+        let new_source = if is_source {
+            Some(field.value.clone())
+        } else {
+            None
+        };
 
         if let Some(src) = new_source {
             if let Some(share_name) = fstab::extract_share_name(&src) {
@@ -1283,9 +1701,13 @@ impl App {
     }
 
     fn form_backspace(&mut self) {
-        let Dialog::Form(form) = &mut self.dialog else { return };
+        let Dialog::Form(form) = &mut self.dialog else {
+            return;
+        };
         let is_share = matches!(form.id, FormId::Share);
-        let Some(field) = form.fields.get_mut(form.focus) else { return };
+        let Some(field) = form.fields.get_mut(form.focus) else {
+            return;
+        };
         if field.toggle || !field.choices.is_empty() {
             return;
         }
@@ -1296,7 +1718,11 @@ impl App {
             field.cursor -= 1;
             field.value = chars.into_iter().collect();
         }
-        let new_source = if is_source { Some(field.value.clone()) } else { None };
+        let new_source = if is_source {
+            Some(field.value.clone())
+        } else {
+            None
+        };
 
         if let Some(src) = new_source {
             if let Some(share_name) = fstab::extract_share_name(&src) {
@@ -1311,7 +1737,11 @@ impl App {
     }
 
     fn focus_shares(&mut self) {
-        if let Some(index) = self.rows.iter().position(|r| matches!(r.kind, RowKind::Shares)) {
+        if let Some(index) = self
+            .rows
+            .iter()
+            .position(|r| matches!(r.kind, RowKind::Shares))
+        {
             self.selected = index;
         }
         self.focus = Focus::Devices;
@@ -1327,15 +1757,25 @@ impl App {
     }
 
     fn open_share(&mut self, fresh: bool) {
-        let share = if fresh { None } else { self.shares.get(self.share_index).cloned() };
-        let protocol = share.as_ref().map(|s| s.fstype.clone()).unwrap_or_else(|| "cifs".into());
+        let share = if fresh {
+            None
+        } else {
+            self.shares.get(self.share_index).cloned()
+        };
+        let protocol = share
+            .as_ref()
+            .map(|s| s.fstype.clone())
+            .unwrap_or_else(|| "cifs".into());
         let proto_choice = match protocol.as_str() {
             "cifs" | "smb" => "Windows / NAS (SMB)",
             "nfs" | "nfs4" => "Linux / UNIX (NFS)",
             "fuse.sshfs" | "sshfs" => "SSH / Server (SSHFS)",
             _ => "Custom",
         };
-        let extra = share.as_ref().map(|s| s.options.clone()).unwrap_or_default();
+        let extra = share
+            .as_ref()
+            .map(|s| s.options.clone())
+            .unwrap_or_default();
         let blurb = if fresh {
             let mut b = String::from("Add a network folder from a Windows PC, NAS (Synology, TrueNAS, QNAP), or Linux server.");
             if let Some(missing) = fstab::missing_helper("cifs") {
@@ -1344,7 +1784,7 @@ impl App {
             }
             b
         } else {
-            "Passwords are saved securely in root-only /etc/disktui-credentials.*, not in plain text in fstab.".into()
+            "Passwords are saved securely in root-only /etc/platter-credentials.*, not in plain text in fstab.".into()
         };
         self.dialog = Dialog::Form(Form {
             title: if fresh { "Add network share".into() } else { "Edit network share".into() },
@@ -1354,7 +1794,7 @@ impl App {
                 text_req("Source", share.as_ref().map(|s| s.source.as_str()).unwrap_or(""), "\\\\server\\share or //192.168.1.100/data", "Address and folder on your NAS/server. Slashes (/) and backslashes (\\) are both supported."),
                 text_req("Mount point", share.as_ref().map(|s| s.target.as_str()).unwrap_or("/mnt/"), "/mnt/<share_name>", "Local folder where files will appear. Auto-derived from Source. Created automatically if missing."),
                 text_opt("Username", "", "your_username (or leave blank if guest/NFS)", "Username for password-protected shares. Leave blank for guest access or NFS shares."),
-                secret_opt("Password", "•••••••• (leave blank if guest/NFS)", "Password for the share. Stored safely in root-only /etc/disktui-credentials.*, NOT in plain text."),
+                secret_opt("Password", "•••••••• (leave blank if guest/NFS)", "Password for the share. Stored safely in root-only /etc/platter-credentials.*, NOT in plain text."),
                 toggle_opt("Guest access", extra.split(',').any(|o| o == "guest"), "Enable for public shares that do not require any username or password."),
                 toggle_opt("Mount now", fresh || share.as_ref().is_some_and(|s| s.mounted), "Immediately connect and mount this share right after saving."),
                 toggle_opt("Auto-connect", extra.contains("x-systemd.automount") || fresh, "Connects automatically on-demand whenever you open the folder in your file manager."),
@@ -1378,11 +1818,14 @@ impl App {
             self.error = "No share selected.".into();
             return;
         };
-        let next = fstab::transform(&self.fstab, &Change::Delete {
-            id: share.id,
-            source: share.source,
-            target: share.target.clone(),
-        });
+        let next = fstab::transform(
+            &self.fstab,
+            &Change::Delete {
+                id: share.id,
+                source: share.source,
+                target: share.target.clone(),
+            },
+        );
         self.pending = Effect::Sudo(SudoJob::ApplyFstab {
             contents: next,
             creds: None,
@@ -1392,7 +1835,9 @@ impl App {
     }
 
     fn mount_share(&mut self, mount: bool) {
-        let Some(share) = self.shares.get(self.share_index).cloned() else { return };
+        let Some(share) = self.shares.get(self.share_index).cloned() else {
+            return;
+        };
         if mount {
             if let Some(missing) = fstab::missing_helper(&share.fstype) {
                 self.error = missing;
@@ -1405,8 +1850,13 @@ impl App {
     }
 
     fn force_unmount(&mut self) {
-        let Some(block) = self.current_block() else { return };
-        self.queue(Op::Unmount { path: block.path, force: true });
+        let Some(block) = self.current_block() else {
+            return;
+        };
+        self.queue(Op::Unmount {
+            path: block.path,
+            force: true,
+        });
     }
 
     fn cancel_job(&mut self) {
@@ -1490,7 +1940,11 @@ fn share_action(id: ActionId, enabled: bool, reason: &str) -> model::Action {
     model::Action {
         id,
         enabled,
-        reason: if enabled { String::new() } else { reason.into() },
+        reason: if enabled {
+            String::new()
+        } else {
+            reason.into()
+        },
     }
 }
 
@@ -1526,55 +1980,175 @@ fn op_label(op: &Op) -> &'static str {
 
 fn text(label: &str, value: &str) -> Field {
     let cursor = value.chars().count();
-    Field { label: label.into(), value: value.into(), cursor, choices: Vec::new(), secret: false, toggle: false, required: false, placeholder: String::new(), hint: String::new() }
+    Field {
+        label: label.into(),
+        value: value.into(),
+        cursor,
+        choices: Vec::new(),
+        secret: false,
+        toggle: false,
+        required: false,
+        placeholder: String::new(),
+        hint: String::new(),
+    }
 }
 fn secret(label: &str) -> Field {
-    Field { label: label.into(), value: String::new(), cursor: 0, choices: Vec::new(), secret: true, toggle: false, required: false, placeholder: String::new(), hint: String::new() }
+    Field {
+        label: label.into(),
+        value: String::new(),
+        cursor: 0,
+        choices: Vec::new(),
+        secret: true,
+        toggle: false,
+        required: false,
+        placeholder: String::new(),
+        hint: String::new(),
+    }
 }
 fn toggle(label: &str, on: bool) -> Field {
-    Field { label: label.into(), value: if on { "yes".into() } else { "no".into() }, cursor: 0, choices: Vec::new(), secret: false, toggle: true, required: false, placeholder: String::new(), hint: String::new() }
+    Field {
+        label: label.into(),
+        value: if on { "yes".into() } else { "no".into() },
+        cursor: 0,
+        choices: Vec::new(),
+        secret: false,
+        toggle: true,
+        required: false,
+        placeholder: String::new(),
+        hint: String::new(),
+    }
 }
 fn choice(label: &str, choices: Vec<String>, current: &str) -> Field {
-    let value = if choices.iter().any(|c| c == current) { current.to_string() } else { choices.first().cloned().unwrap_or_default() };
-    Field { label: label.into(), value, cursor: 0, choices, secret: false, toggle: false, required: false, placeholder: String::new(), hint: String::new() }
+    let value = if choices.iter().any(|c| c == current) {
+        current.to_string()
+    } else {
+        choices.first().cloned().unwrap_or_default()
+    };
+    Field {
+        label: label.into(),
+        value,
+        cursor: 0,
+        choices,
+        secret: false,
+        toggle: false,
+        required: false,
+        placeholder: String::new(),
+        hint: String::new(),
+    }
 }
 
 fn text_req(label: &str, value: &str, placeholder: &str, hint: &str) -> Field {
     let cursor = value.chars().count();
-    Field { label: label.into(), value: value.into(), cursor, choices: Vec::new(), secret: false, toggle: false, required: true, placeholder: placeholder.into(), hint: hint.into() }
+    Field {
+        label: label.into(),
+        value: value.into(),
+        cursor,
+        choices: Vec::new(),
+        secret: false,
+        toggle: false,
+        required: true,
+        placeholder: placeholder.into(),
+        hint: hint.into(),
+    }
 }
 
 fn text_opt(label: &str, value: &str, placeholder: &str, hint: &str) -> Field {
     let cursor = value.chars().count();
-    Field { label: label.into(), value: value.into(), cursor, choices: Vec::new(), secret: false, toggle: false, required: false, placeholder: placeholder.into(), hint: hint.into() }
+    Field {
+        label: label.into(),
+        value: value.into(),
+        cursor,
+        choices: Vec::new(),
+        secret: false,
+        toggle: false,
+        required: false,
+        placeholder: placeholder.into(),
+        hint: hint.into(),
+    }
 }
 
 fn secret_opt(label: &str, placeholder: &str, hint: &str) -> Field {
-    Field { label: label.into(), value: String::new(), cursor: 0, choices: Vec::new(), secret: true, toggle: false, required: false, placeholder: placeholder.into(), hint: hint.into() }
+    Field {
+        label: label.into(),
+        value: String::new(),
+        cursor: 0,
+        choices: Vec::new(),
+        secret: true,
+        toggle: false,
+        required: false,
+        placeholder: placeholder.into(),
+        hint: hint.into(),
+    }
 }
 
 fn choice_req(label: &str, choices: Vec<String>, current: &str, hint: &str) -> Field {
-    let value = if choices.iter().any(|c| c == current) { current.to_string() } else { choices.first().cloned().unwrap_or_default() };
-    Field { label: label.into(), value, cursor: 0, choices, secret: false, toggle: false, required: true, placeholder: String::new(), hint: hint.into() }
+    let value = if choices.iter().any(|c| c == current) {
+        current.to_string()
+    } else {
+        choices.first().cloned().unwrap_or_default()
+    };
+    Field {
+        label: label.into(),
+        value,
+        cursor: 0,
+        choices,
+        secret: false,
+        toggle: false,
+        required: true,
+        placeholder: String::new(),
+        hint: hint.into(),
+    }
 }
 
 fn choice_opt(label: &str, choices: Vec<String>, current: &str, hint: &str) -> Field {
-    let value = if choices.iter().any(|c| c == current) { current.to_string() } else { choices.first().cloned().unwrap_or_default() };
-    Field { label: label.into(), value, cursor: 0, choices, secret: false, toggle: false, required: false, placeholder: String::new(), hint: hint.into() }
+    let value = if choices.iter().any(|c| c == current) {
+        current.to_string()
+    } else {
+        choices.first().cloned().unwrap_or_default()
+    };
+    Field {
+        label: label.into(),
+        value,
+        cursor: 0,
+        choices,
+        secret: false,
+        toggle: false,
+        required: false,
+        placeholder: String::new(),
+        hint: hint.into(),
+    }
 }
 
 fn toggle_opt(label: &str, on: bool, hint: &str) -> Field {
-    Field { label: label.into(), value: if on { "yes".into() } else { "no".into() }, cursor: 0, choices: Vec::new(), secret: false, toggle: true, required: false, placeholder: String::new(), hint: hint.into() }
+    Field {
+        label: label.into(),
+        value: if on { "yes".into() } else { "no".into() },
+        cursor: 0,
+        choices: Vec::new(),
+        secret: false,
+        toggle: true,
+        required: false,
+        placeholder: String::new(),
+        hint: hint.into(),
+    }
 }
 
 fn yes(form: &Form, label: &str) -> bool {
-    form.fields.iter().any(|f| f.label == label && f.value == "yes")
+    form.fields
+        .iter()
+        .any(|f| f.label == label && f.value == "yes")
 }
 fn yes_or(form: &Form, labels: &[&str]) -> bool {
-    form.fields.iter().any(|f| labels.contains(&f.label.as_str()) && f.value == "yes")
+    form.fields
+        .iter()
+        .any(|f| labels.contains(&f.label.as_str()) && f.value == "yes")
 }
 fn val<'a>(form: &'a Form, label: &str) -> &'a str {
-    form.fields.iter().find(|f| f.label == label).map(|f| f.value.as_str()).unwrap_or("")
+    form.fields
+        .iter()
+        .find(|f| f.label == label)
+        .map(|f| f.value.as_str())
+        .unwrap_or("")
 }
 fn val_or<'a>(form: &'a Form, labels: &[&str]) -> &'a str {
     for label in labels {
@@ -1618,12 +2192,28 @@ fn build(form: &Form, model: &Model, caps: &Caps, uid: u32, gid: u32, fstab_text
                 passphrase: val(form, "Passphrase").into(),
                 take_ownership: yes(form, "Take ownership"),
             });
-            Build::Confirm { title: "Format".into(), body: "Formatting erases what is on this device.".into(), op, kernel: String::new(), system: false }
+            Build::Confirm {
+                title: "Format".into(),
+                body: "Formatting erases what is on this device.".into(),
+                op,
+                kernel: String::new(),
+                system: false,
+            }
         }
-        FormId::Create { disk, offset, max, table } => {
+        FormId::Create {
+            disk,
+            offset,
+            max,
+            table,
+        } => {
             let size = match parse_size(val(form, "Size (blank = all)")) {
                 Some(0) => 0,
-                Some(size) if size > *max => return Build::Err(format!("Size is larger than the free space ({}).", human_size(*max))),
+                Some(size) if size > *max => {
+                    return Build::Err(format!(
+                        "Size is larger than the free space ({}).",
+                        human_size(*max)
+                    ))
+                }
                 Some(size) => size,
                 None => return Build::Err("Could not read the size. Try 20G or max.".into()),
             };
@@ -1640,13 +2230,23 @@ fn build(form: &Form, model: &Model, caps: &Caps, uid: u32, gid: u32, fstab_text
                 size,
                 type_code,
                 name: val(form, "Name").into(),
-                fstype: if fstype == "none" { String::new() } else { fstype.into() },
+                fstype: if fstype == "none" {
+                    String::new()
+                } else {
+                    fstype.into()
+                },
                 label: val(form, "Label").into(),
                 encrypt: yes(form, "Encrypt with LUKS2"),
                 passphrase: val(form, "Passphrase").into(),
             }))
         }
-        FormId::Resize { path, current, filesystem, mounted, fstype } => {
+        FormId::Resize {
+            path,
+            current,
+            filesystem,
+            mounted,
+            fstype,
+        } => {
             let Some(new_size) = parse_size(val(form, "New size")) else {
                 return Build::Err("Could not read the size.".into());
             };
@@ -1654,21 +2254,42 @@ fn build(form: &Form, model: &Model, caps: &Caps, uid: u32, gid: u32, fstab_text
                 if let Some(cap) = caps.resize.get(fstype.as_str()) {
                     let grow = new_size == 0 || new_size > *current;
                     if !cap.allows(*mounted, grow) {
-                        let why = if cap.missing.is_empty() { "this filesystem cannot be resized that way".into() } else { format!("install {}", cap.missing) };
+                        let why = if cap.missing.is_empty() {
+                            "this filesystem cannot be resized that way".into()
+                        } else {
+                            format!("install {}", cap.missing)
+                        };
                         return Build::Err(why);
                     }
                 }
             }
-            Build::Op(Op::Resize { path: path.clone(), current: *current, new_size, filesystem: *filesystem })
+            Build::Op(Op::Resize {
+                path: path.clone(),
+                current: *current,
+                new_size,
+                filesystem: *filesystem,
+            })
         }
-        FormId::Label { path, swap } => Build::Op(Op::SetLabel { path: path.clone(), label: val(form, "Label").into(), swap: *swap }),
+        FormId::Label { path, swap } => Build::Op(Op::SetLabel {
+            path: path.clone(),
+            label: val(form, "Label").into(),
+            swap: *swap,
+        }),
         FormId::MountOptions { path } => {
             let Some(block) = model.block(path) else {
                 return Build::Err("Device disappeared.".into());
             };
-            let existing: Vec<_> = block.config.iter().filter(|c| c.kind == "fstab").cloned().collect();
+            let existing: Vec<_> = block
+                .config
+                .iter()
+                .filter(|c| c.kind == "fstab")
+                .cloned()
+                .collect();
             if !yes(form, "Mount at startup") {
-                return Build::Op(Op::ClearFstab { path: path.clone(), items: existing });
+                return Build::Op(Op::ClearFstab {
+                    path: path.clone(),
+                    items: existing,
+                });
             }
             let dir = val(form, "Mount point");
             if !dir.starts_with('/') {
@@ -1682,32 +2303,58 @@ fn build(form: &Form, model: &Model, caps: &Caps, uid: u32, gid: u32, fstab_text
                 existing,
                 fsname,
                 dir: dir.into(),
-                fstype: if block.id_type.is_empty() { "auto".into() } else { block.id_type.clone() },
+                fstype: if block.id_type.is_empty() {
+                    "auto".into()
+                } else {
+                    block.id_type.clone()
+                },
                 opts: {
                     let opts = val(form, "Options");
-                    if opts.is_empty() { "defaults".into() } else { opts.into() }
+                    if opts.is_empty() {
+                        "defaults".into()
+                    } else {
+                        opts.into()
+                    }
                 },
                 passno,
             }))
         }
-        FormId::Unlock { path } => Build::Op(Op::Unlock { path: path.clone(), passphrase: val(form, "Passphrase").into() }),
+        FormId::Unlock { path } => Build::Op(Op::Unlock {
+            path: path.clone(),
+            passphrase: val(form, "Passphrase").into(),
+        }),
         FormId::ChangePass { path } => {
             let new = val(form, "New");
             if new != val(form, "Repeat") {
                 return Build::Err("The new passphrases do not match.".into());
             }
-            Build::Op(Op::ChangePassphrase { path: path.clone(), old: val(form, "Current").into(), new: new.into() })
+            Build::Op(Op::ChangePassphrase {
+                path: path.clone(),
+                old: val(form, "Current").into(),
+                new: new.into(),
+            })
         }
         FormId::EditPartition { path, table } => {
-            let Some(block) = model.block(path) else { return Build::Err("Device disappeared.".into()); };
+            let Some(block) = model.block(path) else {
+                return Build::Err("Device disappeared.".into());
+            };
             let mut flags = block.partition.as_ref().map(|p| p.flags).unwrap_or(0);
             if table == "dos" {
                 flags &= !(1 << 7);
-                if yes(form, "Bootable") { flags |= 1 << 7; }
+                if yes(form, "Bootable") {
+                    flags |= 1 << 7;
+                }
             } else {
-                for (label, bit) in [("System partition", 0u32), ("Hidden", 62), ("Do not automount", 63), ("Read-only", 60)] {
+                for (label, bit) in [
+                    ("System partition", 0u32),
+                    ("Hidden", 62),
+                    ("Do not automount", 63),
+                    ("Read-only", 60),
+                ] {
                     flags &= !(1 << bit);
-                    if yes(form, label) { flags |= 1 << bit; }
+                    if yes(form, label) {
+                        flags |= 1 << bit;
+                    }
                 }
             }
             Build::Op(Op::EditPartition {
@@ -1717,90 +2364,187 @@ fn build(form: &Form, model: &Model, caps: &Caps, uid: u32, gid: u32, fstab_text
                 flags,
             })
         }
-        FormId::Image { path, size, restore } => {
+        FormId::Image {
+            path,
+            size,
+            restore,
+        } => {
             let file = val(form, "Image file");
-            if file.is_empty() { return Build::Err("Choose an image file.".into()); }
+            if file.is_empty() {
+                return Build::Err("Choose an image file.".into());
+            }
             let op = if *restore {
-                Op::Restore { path: path.clone(), file: file.into(), size: *size, cancel: Arc::new(AtomicBool::new(false)) }
+                Op::Restore {
+                    path: path.clone(),
+                    file: file.into(),
+                    size: *size,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                }
             } else {
-                Op::Backup { path: path.clone(), file: file.into(), size: *size, cancel: Arc::new(AtomicBool::new(false)) }
+                Op::Backup {
+                    path: path.clone(),
+                    file: file.into(),
+                    size: *size,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                }
             };
             if *restore {
-                Build::Confirm { title: "Restore image".into(), body: "Restoring overwrites the device.".into(), op, kernel: String::new(), system: false }
+                Build::Confirm {
+                    title: "Restore image".into(),
+                    body: "Restoring overwrites the device.".into(),
+                    op,
+                    kernel: String::new(),
+                    system: false,
+                }
             } else {
                 Build::Op(op)
             }
         }
         FormId::Benchmark { path, size } => {
             let write = val(form, "Mode") == "write";
-            let op = Op::Benchmark { path: path.clone(), write, size: *size, cancel: Arc::new(AtomicBool::new(false)) };
+            let op = Op::Benchmark {
+                path: path.clone(),
+                write,
+                size: *size,
+                cancel: Arc::new(AtomicBool::new(false)),
+            };
             if write {
-                Build::Confirm { title: "Write benchmark".into(), body: "A write benchmark destroys the contents of the device.".into(), op, kernel: String::new(), system: false }
+                Build::Confirm {
+                    title: "Write benchmark".into(),
+                    body: "A write benchmark destroys the contents of the device.".into(),
+                    op,
+                    kernel: String::new(),
+                    system: false,
+                }
             } else {
                 Build::Op(op)
             }
         }
         FormId::DriveSettings { path } => {
-            let Some(drive) = model.drive(path) else { return Build::Err("Drive disappeared.".into()); };
+            let Some(drive) = model.drive(path) else {
+                return Build::Err("Drive disappeared.".into());
+            };
             let mut pairs = drive.config.clone();
             set_i32(&mut pairs, "ata-pm-standby", val(form, "Standby seconds"));
             set_i32(&mut pairs, "ata-apm-level", val(form, "APM level"));
-            set_bool(&mut pairs, "ata-write-cache-enabled", yes(form, "Write cache"));
-            set_bool(&mut pairs, "ata-read-lookahead-enabled", yes(form, "Read look-ahead"));
-            Build::Op(Op::DriveConfig { path: path.clone(), pairs })
+            set_bool(
+                &mut pairs,
+                "ata-write-cache-enabled",
+                yes(form, "Write cache"),
+            );
+            set_bool(
+                &mut pairs,
+                "ata-read-lookahead-enabled",
+                yes(form, "Read look-ahead"),
+            );
+            Build::Op(Op::DriveConfig {
+                path: path.clone(),
+                pairs,
+            })
         }
         FormId::RaidCreate => {
             let name = val(form, "Name").to_string();
-            if name.is_empty() { return Build::Err("Give the array a name.".into()); }
-            let devices: Vec<String> = val(form, "Devices").split_whitespace().map(|name| {
-                let kernel = name.trim_start_matches("/dev/");
-                model.blocks.iter().find(|b| kernel_name(b.device_path()) == kernel).map(|b| b.path.clone())
-            }).collect::<Option<Vec<_>>>().unwrap_or_default();
-            if devices.len() < 2 {
-                return Build::Err("Name at least two devices that are visible in the list.".into());
+            if name.is_empty() {
+                return Build::Err("Give the array a name.".into());
             }
-            let chunk = parse_size(val(form, "Chunk")).unwrap_or(0);
+            let devices: Vec<String> = val(form, "Devices")
+                .split_whitespace()
+                .map(|name| {
+                    let kernel = name.trim_start_matches("/dev/");
+                    model
+                        .blocks
+                        .iter()
+                        .find(|b| kernel_name(b.device_path()) == kernel)
+                        .map(|b| b.path.clone())
+                })
+                .collect::<Option<Vec<_>>>()
+                .unwrap_or_default();
+            if devices.len() < 2 {
+                return Build::Err(
+                    "Name at least two devices that are visible in the list.".into(),
+                );
+            }
+            let Some(chunk) = parse_size(val(form, "Chunk")) else {
+                return Build::Err("Invalid or overflowing RAID chunk size.".into());
+            };
             let system = devices.iter().any(|path| model.is_system_tree(path));
-            let op = Op::RaidCreate { devices, level: val(form, "Level").into(), name: name.clone(), chunk };
-            Build::Confirm { title: "Create RAID".into(), body: "Creating an array erases every member device. Type raid to confirm.".into(), op, kernel: "raid".into(), system }
+            let op = Op::RaidCreate {
+                devices,
+                level: val(form, "Level").into(),
+                name: name.clone(),
+                chunk,
+            };
+            Build::Confirm {
+                title: "Create RAID".into(),
+                body: "Creating an array erases every member device. Type raid to confirm.".into(),
+                op,
+                kernel: "raid".into(),
+                system,
+            }
         }
         FormId::Share => share_build(form, uid, gid, fstab_text),
         FormId::LoopAttach => {
             let file = val(form, "Image file");
-            if file.is_empty() { return Build::Err("Choose an image file.".into()); }
-            Build::Op(Op::LoopSetup { file: file.into(), read_only: yes(form, "Read only") })
+            if file.is_empty() {
+                return Build::Err("Choose an image file.".into());
+            }
+            Build::Op(Op::LoopSetup {
+                file: file.into(),
+                read_only: yes(form, "Read only"),
+            })
         }
         FormId::Header { path, restore } => {
             let file = val(form, "File");
-            if file.is_empty() { return Build::Err("Choose a file.".into()); }
+            if file.is_empty() {
+                return Build::Err("Choose a file.".into());
+            }
             if *restore {
                 Build::Confirm {
                     title: "Restore header".into(),
                     body: "Restoring a header replaces the LUKS header on the device.".into(),
-                    op: Op::RestoreHeader { path: path.clone(), file: file.into() },
+                    op: Op::RestoreHeader {
+                        path: path.clone(),
+                        file: file.into(),
+                    },
                     kernel: String::new(),
                     system: false,
                 }
             } else {
-                Build::Op(Op::HeaderBackup { path: path.clone(), file: file.into() })
+                Build::Op(Op::HeaderBackup {
+                    path: path.clone(),
+                    file: file.into(),
+                })
             }
         }
-        FormId::SmartTest { path, nvme } => Build::Op(Op::SmartTest { path: path.clone(), kind: val(form, "Test").into(), nvme: *nvme }),
+        FormId::SmartTest { path, nvme } => Build::Op(Op::SmartTest {
+            path: path.clone(),
+            kind: val(form, "Test").into(),
+            nvme: *nvme,
+        }),
         FormId::Sanitize { path } => Build::Confirm {
             title: "NVMe sanitize".into(),
             body: "Sanitize destroys all data on the controller and cannot be cancelled.".into(),
-            op: Op::Sanitize { path: path.clone(), action: val(form, "Action").into() },
+            op: Op::Sanitize {
+                path: path.clone(),
+                action: val(form, "Action").into(),
+            },
             kernel: String::new(),
             system: false,
         },
         FormId::SecureErase { path } => Build::Confirm {
             title: "Secure erase".into(),
             body: "Secure erase destroys all data on the drive.".into(),
-            op: Op::SecureErase { path: path.clone(), enhanced: yes(form, "Enhanced erase") },
+            op: Op::SecureErase {
+                path: path.clone(),
+                enhanced: yes(form, "Enhanced erase"),
+            },
             kernel: String::new(),
             system: false,
         },
-        FormId::Convert { path } => Build::Op(Op::ConvertLuks { path: path.clone(), version: val(form, "Version").into() }),
+        FormId::Convert { path } => Build::Op(Op::ConvertLuks {
+            path: path.clone(),
+            version: val(form, "Version").into(),
+        }),
     }
 }
 
@@ -1850,17 +2594,29 @@ fn share_build(form: &Form, uid: u32, gid: u32, fstab_text: &str) -> Build {
         Ok(plan) => plan,
         Err(err) => return Build::Err(err),
     };
-    if plan.entry_line.contains("DISKTUI_") || plan.credentials.as_ref().is_some_and(|c| c.contents.contains("DISKTUI_")) {
+    if plan.entry_line.contains("PLATTER_")
+        || plan
+            .credentials
+            .as_ref()
+            .is_some_and(|c| c.contents.contains("PLATTER_"))
+    {
         return Build::Err("A field contains a reserved marker.".into());
     }
-    let contents = fstab::transform(fstab_text, &Change::Upsert {
-        id: plan.id,
-        source: plan.source,
-        target: plan.target.clone(),
-        line: plan.entry_line,
-    });
+    let contents = fstab::transform(
+        fstab_text,
+        &Change::Upsert {
+            id: plan.id,
+            source: plan.source,
+            target: plan.target.clone(),
+            line: plan.entry_line,
+        },
+    );
     let mount = yes_or(form, &["Mount now"]).then_some(plan.target);
-    Build::Sudo(SudoJob::ApplyFstab { contents, creds: plan.credentials, mount })
+    Build::Sudo(SudoJob::ApplyFstab {
+        contents,
+        creds: plan.credentials,
+        mount,
+    })
 }
 
 fn set_i32(pairs: &mut Vec<(String, PropVal)>, key: &str, text: &str) {
@@ -1868,7 +2624,9 @@ fn set_i32(pairs: &mut Vec<(String, PropVal)>, key: &str, text: &str) {
         pairs.retain(|(k, _)| k != key);
         return;
     }
-    let Ok(value) = text.trim().parse::<i32>() else { return };
+    let Ok(value) = text.trim().parse::<i32>() else {
+        return;
+    };
     if let Some((_, slot)) = pairs.iter_mut().find(|(k, _)| k == key) {
         *slot = PropVal::I32(value);
     } else {
@@ -1885,19 +2643,26 @@ fn set_bool(pairs: &mut Vec<(String, PropVal)>, key: &str, value: bool) {
 }
 
 fn drive_int(pairs: &[(String, PropVal)], key: &str) -> String {
-    pairs.iter().find(|(k, _)| k == key).and_then(|(_, v)| match v {
-        PropVal::I32(n) => Some(n.to_string()),
-        PropVal::U32(n) => Some(n.to_string()),
-        PropVal::I64(n) => Some(n.to_string()),
-        _ => None,
-    }).unwrap_or_default()
+    pairs
+        .iter()
+        .find(|(k, _)| k == key)
+        .and_then(|(_, v)| match v {
+            PropVal::I32(n) => Some(n.to_string()),
+            PropVal::U32(n) => Some(n.to_string()),
+            PropVal::I64(n) => Some(n.to_string()),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 fn drive_bool(pairs: &[(String, PropVal)], key: &str) -> Option<bool> {
-    pairs.iter().find(|(k, _)| k == key).and_then(|(_, v)| match v {
-        PropVal::Bool(b) => Some(*b),
-        _ => None,
-    })
+    pairs
+        .iter()
+        .find(|(k, _)| k == key)
+        .and_then(|(_, v)| match v {
+            PropVal::Bool(b) => Some(*b),
+            _ => None,
+        })
 }
 
 fn opt_of(options: &str, key: &str) -> Option<String> {
@@ -1915,7 +2680,7 @@ mod tests {
     fn make_test_app() -> App {
         App::new(
             Config::default(),
-            PathBuf::from("/tmp/test-disktui.toml"),
+            PathBuf::from("/tmp/test-platter.toml"),
             crate::theme::resolve("tokyo-night", None, None),
             None,
             None,
@@ -1942,7 +2707,11 @@ mod tests {
         if let Dialog::Form(form) = &app.dialog {
             assert_eq!(form.focus, 1);
             assert_eq!(form.fields[1].label, "Source");
-            let mp = form.fields.iter().find(|f| f.label == "Mount point").unwrap();
+            let mp = form
+                .fields
+                .iter()
+                .find(|f| f.label == "Mount point")
+                .unwrap();
             assert_eq!(mp.value, "/mnt/");
         } else {
             panic!("expected form dialog");
@@ -1956,7 +2725,11 @@ mod tests {
         if let Dialog::Form(form) = &app.dialog {
             let src = form.fields.iter().find(|f| f.label == "Source").unwrap();
             assert_eq!(src.value, "\\\\server\\shared_docs");
-            let mp = form.fields.iter().find(|f| f.label == "Mount point").unwrap();
+            let mp = form
+                .fields
+                .iter()
+                .find(|f| f.label == "Mount point")
+                .unwrap();
             // Should have auto-completed to /mnt/shared_docs!
             assert_eq!(mp.value, "/mnt/shared_docs");
         }
@@ -2029,7 +2802,11 @@ mod tests {
             title: "Add network share".into(),
             blurb: "".into(),
             fields: vec![
-                choice("Protocol", vec!["Windows / NAS (SMB)".into()], "Windows / NAS (SMB)"),
+                choice(
+                    "Protocol",
+                    vec!["Windows / NAS (SMB)".into()],
+                    "Windows / NAS (SMB)",
+                ),
                 text("Source", "//nas/storage"),
                 text("Mount point", "/mnt/storage"),
                 toggle("Guest", true),
@@ -2052,13 +2829,25 @@ mod tests {
         };
 
         match share_build(&form, 1000, 1000, "") {
-            Build::Sudo(SudoJob::ApplyFstab { contents, mount, .. }) => {
+            Build::Sudo(SudoJob::ApplyFstab {
+                contents, mount, ..
+            }) => {
                 assert!(contents.contains("//nas/storage /mnt/storage cifs"));
                 assert!(contents.contains("guest"));
                 assert_eq!(mount, Some("/mnt/storage".to_string()));
             }
-            other => panic!("expected Build::Sudo, got {:?}", matches!(other, Build::Err(_))),
+            other => panic!(
+                "expected Build::Sudo, got {:?}",
+                matches!(other, Build::Err(_))
+            ),
         }
     }
 }
 
+pub const ACTIONS: &[crate::commands::Action] = &[
+    crate::commands::Action::key("Theme picker", 't'),
+    crate::commands::Action::key("Help", '?'),
+    crate::commands::Action::theme("Aurora theme", 'a'),
+    crate::commands::Action::theme("Follow Omarchy theme", 'o'),
+    crate::commands::Action::theme("Terminal theme", 't'),
+];

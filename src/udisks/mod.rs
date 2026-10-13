@@ -19,7 +19,8 @@ pub use ops::execute;
 
 const DEST: &str = "org.freedesktop.UDisks2";
 
-type RawObjects = HashMap<OwnedObjectPath, HashMap<OwnedInterfaceName, HashMap<String, OwnedValue>>>;
+type RawObjects =
+    HashMap<OwnedObjectPath, HashMap<OwnedInterfaceName, HashMap<String, OwnedValue>>>;
 type Props = HashMap<String, OwnedValue>;
 
 pub async fn connect() -> Result<Connection> {
@@ -34,24 +35,33 @@ pub async fn watch(conn: Connection, tx: UnboundedSender<Msg>) {
     loop {
         tick.tick().await;
         match fetch(&conn).await {
-            Ok(model) => { let _ = tx.send(Msg::Model(model)); }
-            Err(err) => { let _ = tx.send(Msg::Error(brief(&format!("{err:#}")))); }
+            Ok(model) => {
+                let _ = tx.send(Msg::Model(model));
+            }
+            Err(err) => {
+                let _ = tx.send(Msg::Error(brief(&format!("{err:#}"))));
+            }
         }
     }
 }
 
 pub async fn load_caps(conn: &Connection) -> crate::model::Caps {
     let mut caps = crate::model::Caps::default();
-    let types = ["ext4", "btrfs", "xfs", "f2fs", "vfat", "exfat", "ntfs", "udf", "swap", "empty"];
+    let types = [
+        "ext4", "btrfs", "xfs", "f2fs", "vfat", "exfat", "ntfs", "udf", "swap", "empty",
+    ];
     for kind in types {
         if let Ok((available, missing)) = can_bs(conn, "CanFormat", kind).await {
-            caps.format.insert(kind.into(), crate::model::Tool { available, missing });
+            caps.format
+                .insert(kind.into(), crate::model::Tool { available, missing });
         }
         if let Ok((available, missing)) = can_bs(conn, "CanCheck", kind).await {
-            caps.check.insert(kind.into(), crate::model::Tool { available, missing });
+            caps.check
+                .insert(kind.into(), crate::model::Tool { available, missing });
         }
         if let Ok((available, missing)) = can_bs(conn, "CanRepair", kind).await {
-            caps.repair.insert(kind.into(), crate::model::Tool { available, missing });
+            caps.repair
+                .insert(kind.into(), crate::model::Tool { available, missing });
         }
         if let Ok((available, mode, missing)) = can_resize(conn, kind).await {
             caps.resize.insert(
@@ -78,7 +88,12 @@ async fn can_resize(conn: &Connection, kind: &str) -> Result<(bool, u64, String)
 }
 
 async fn manager(conn: &Connection) -> Result<Proxy<'_>> {
-    proxy(conn, "/org/freedesktop/UDisks2", "org.freedesktop.UDisks2.Manager").await
+    proxy(
+        conn,
+        "/org/freedesktop/UDisks2",
+        "org.freedesktop.UDisks2.Manager",
+    )
+    .await
 }
 
 pub(crate) async fn proxy<'a>(
@@ -140,9 +155,15 @@ fn parse_drive(path: &str, props: &Props, ata: Option<&Props>, nvme: Option<&Pro
             None
         }
     });
-    let nvme_hours = nvme.map(|p| prop_u64(p, "SmartPowerOnHours")).filter(|h| *h > 0);
-    let nvme_selftest = nvme.map(|p| prop_str(p, "SmartSelftestStatus")).filter(|s| !s.is_empty());
-    let nvme_sanitize = nvme.map(|p| prop_str(p, "SanitizeStatus")).filter(|s| !s.is_empty());
+    let nvme_hours = nvme
+        .map(|p| prop_u64(p, "SmartPowerOnHours"))
+        .filter(|h| *h > 0);
+    let nvme_selftest = nvme
+        .map(|p| prop_str(p, "SmartSelftestStatus"))
+        .filter(|s| !s.is_empty());
+    let nvme_sanitize = nvme
+        .map(|p| prop_str(p, "SanitizeStatus"))
+        .filter(|s| !s.is_empty());
 
     Drive {
         path: path.to_string(),
@@ -187,11 +208,11 @@ fn parse_ata(props: &Props) -> Ata {
     }
 }
 
-fn iface<'a>(
-    ifaces: &'a HashMap<OwnedInterfaceName, Props>,
-    name: &str,
-) -> Option<&'a Props> {
-    ifaces.iter().find(|(key, _)| key.as_str() == name).map(|(_, props)| props)
+fn iface<'a>(ifaces: &'a HashMap<OwnedInterfaceName, Props>, name: &str) -> Option<&'a Props> {
+    ifaces
+        .iter()
+        .find(|(key, _)| key.as_str() == name)
+        .map(|(_, props)| props)
 }
 
 fn parse_block(path: &str, props: &Props, ifaces: &HashMap<OwnedInterfaceName, Props>) -> Block {
@@ -208,7 +229,11 @@ fn parse_block(path: &str, props: &Props, ifaces: &HashMap<OwnedInterfaceName, P
     Block {
         path: path.to_string(),
         device: device.clone(),
-        preferred: if preferred.is_empty() { device } else { preferred },
+        preferred: if preferred.is_empty() {
+            device
+        } else {
+            preferred
+        },
         id_usage: prop_str(props, "IdUsage"),
         id_type: prop_str(props, "IdType"),
         id_label: prop_str(props, "IdLabel"),
@@ -225,16 +250,27 @@ fn parse_block(path: &str, props: &Props, ifaces: &HashMap<OwnedInterfaceName, P
         partition,
         table,
         filesystem: fs.is_some(),
-        mount_points: fs.map(|props| prop_byte_list(props, "MountPoints")).unwrap_or_default(),
+        mount_points: fs
+            .map(|props| prop_byte_list(props, "MountPoints"))
+            .unwrap_or_default(),
         swap: swap.is_some(),
         swap_active: swap.is_some_and(|props| prop_bool(props, "Active")),
         encrypted: enc.is_some(),
-        cleartext: enc.map(|props| prop_path(props, "CleartextDevice")).unwrap_or_else(|| "/".into()),
-        hint_encryption: enc.map(|props| prop_str(props, "HintEncryptionType")).unwrap_or_default(),
+        cleartext: enc
+            .map(|props| prop_path(props, "CleartextDevice"))
+            .unwrap_or_else(|| "/".into()),
+        hint_encryption: enc
+            .map(|props| prop_str(props, "HintEncryptionType"))
+            .unwrap_or_default(),
         loopback: loop_dev.is_some(),
-        backing_file: loop_dev.map(|props| prop_bytes(props, "BackingFile")).unwrap_or_default(),
+        backing_file: loop_dev
+            .map(|props| prop_bytes(props, "BackingFile"))
+            .unwrap_or_default(),
         loop_autoclear: loop_dev.is_some_and(|props| prop_bool(props, "Autoclear")),
-        config: props.get("Configuration").map(parse_config).unwrap_or_default(),
+        config: props
+            .get("Configuration")
+            .map(parse_config)
+            .unwrap_or_default(),
     }
 }
 
@@ -264,7 +300,10 @@ fn parse_raid(path: &str, props: &Props) -> Raid {
         degraded: prop_u64(props, "Degraded") > 0,
         sync_action: prop_str(props, "SyncAction"),
         sync_completed: prop_f64(props, "SyncCompleted"),
-        members: props.get("ActiveDevices").map(active_devices).unwrap_or_default(),
+        members: props
+            .get("ActiveDevices")
+            .map(active_devices)
+            .unwrap_or_default(),
     }
 }
 
@@ -285,7 +324,9 @@ fn active_devices(value: &OwnedValue) -> Vec<String> {
     };
     let mut out = Vec::new();
     for item in array.inner() {
-        let Value::Structure(fields) = unvar(item) else { continue };
+        let Value::Structure(fields) = unvar(item) else {
+            continue;
+        };
         if let Some(path) = fields.fields().first().and_then(|v| as_str(unvar(v))) {
             if path != "/" {
                 out.push(path.to_string());
@@ -301,11 +342,21 @@ fn parse_config(value: &OwnedValue) -> Vec<ConfigItem> {
     };
     let mut out = Vec::new();
     for item in array.inner() {
-        let Value::Structure(fields) = unvar(item) else { continue };
+        let Value::Structure(fields) = unvar(item) else {
+            continue;
+        };
         let entries = fields.fields();
-        let Some(kind) = entries.first().and_then(|v| as_str(unvar(v))) else { continue };
-        let parsed = entries.get(1).map(|v| dict_props(unvar(v))).unwrap_or_default();
-        out.push(ConfigItem { kind: kind.to_string(), fields: parsed });
+        let Some(kind) = entries.first().and_then(|v| as_str(unvar(v))) else {
+            continue;
+        };
+        let parsed = entries
+            .get(1)
+            .map(|v| dict_props(unvar(v)))
+            .unwrap_or_default();
+        out.push(ConfigItem {
+            kind: kind.to_string(),
+            fields: parsed,
+        });
     }
     out
 }
@@ -314,9 +365,9 @@ fn dict_props(value: &Value) -> Vec<(String, PropVal)> {
     let Value::Dict(dict) = unvar(value) else {
         return Vec::new();
     };
-    dict.iter().filter_map(|(key, raw)| {
-        as_str(key).map(|key| (key.to_string(), as_prop(raw)))
-    }).collect()
+    dict.iter()
+        .filter_map(|(key, raw)| as_str(key).map(|key| (key.to_string(), as_prop(raw))))
+        .collect()
 }
 
 fn as_prop(value: &Value) -> PropVal {
@@ -329,10 +380,14 @@ fn as_prop(value: &Value) -> PropVal {
         Value::Str(v) => PropVal::Str(v.to_string()),
         Value::ObjectPath(v) => PropVal::Path(v.to_string()),
         Value::Array(array) => {
-            let bytes: Vec<u8> = array.inner().iter().filter_map(|item| match unvar(item) {
-                Value::U8(b) => Some(*b),
-                _ => None,
-            }).collect();
+            let bytes: Vec<u8> = array
+                .inner()
+                .iter()
+                .filter_map(|item| match unvar(item) {
+                    Value::U8(b) => Some(*b),
+                    _ => None,
+                })
+                .collect();
             PropVal::Bytes(bytes)
         }
         _ => PropVal::Str(String::new()),
@@ -393,16 +448,23 @@ fn prop_f64(props: &Props, name: &str) -> f64 {
 }
 
 fn prop_path(props: &Props, name: &str) -> String {
-    prop(props, name).and_then(as_str).unwrap_or("/").to_string()
+    prop(props, name)
+        .and_then(as_str)
+        .unwrap_or("/")
+        .to_string()
 }
 
 fn prop_bytes(props: &Props, name: &str) -> String {
     match prop(props, name).map(unvar) {
         Some(Value::Array(array)) => {
-            let bytes: Vec<u8> = array.inner().iter().filter_map(|item| match unvar(item) {
-                Value::U8(b) => Some(*b),
-                _ => None,
-            }).collect();
+            let bytes: Vec<u8> = array
+                .inner()
+                .iter()
+                .filter_map(|item| match unvar(item) {
+                    Value::U8(b) => Some(*b),
+                    _ => None,
+                })
+                .collect();
             c_string(&bytes)
         }
         Some(Value::Str(text)) => text.to_string(),
@@ -414,25 +476,37 @@ fn prop_byte_list(props: &Props, name: &str) -> Vec<String> {
     let Some(Value::Array(array)) = prop(props, name).map(unvar) else {
         return Vec::new();
     };
-    array.inner().iter().filter_map(|item| match unvar(item) {
-        Value::Array(inner) => {
-            let bytes: Vec<u8> = inner.inner().iter().filter_map(|b| match unvar(b) {
-                Value::U8(v) => Some(*v),
-                _ => None,
-            }).collect();
-            let text = c_string(&bytes);
-            (!text.is_empty()).then_some(text)
-        }
-        Value::Str(text) => Some(text.to_string()),
-        _ => None,
-    }).collect()
+    array
+        .inner()
+        .iter()
+        .filter_map(|item| match unvar(item) {
+            Value::Array(inner) => {
+                let bytes: Vec<u8> = inner
+                    .inner()
+                    .iter()
+                    .filter_map(|b| match unvar(b) {
+                        Value::U8(v) => Some(*v),
+                        _ => None,
+                    })
+                    .collect();
+                let text = c_string(&bytes);
+                (!text.is_empty()).then_some(text)
+            }
+            Value::Str(text) => Some(text.to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn prop_paths(props: &Props, name: &str) -> Vec<String> {
     let Some(Value::Array(array)) = prop(props, name).map(unvar) else {
         return Vec::new();
     };
-    array.inner().iter().filter_map(|item| as_str(item).map(|s| s.to_string())).collect()
+    array
+        .inner()
+        .iter()
+        .filter_map(|item| as_str(item).map(|s| s.to_string()))
+        .collect()
 }
 
 fn prop_dict(props: &Props, name: &str) -> Vec<(String, PropVal)> {

@@ -25,19 +25,47 @@ pub fn parse_size(text: &str) -> Option<u64> {
         .find(|(_, c)| c.is_ascii_alphabetic())
         .map(|(i, _)| text.split_at(i))
         .unwrap_or((text, ""));
-    let number: f64 = number.trim().parse().ok()?;
-    if number < 0.0 {
-        return None;
-    }
-    let mult: u64 = match unit.trim().to_ascii_lowercase().as_str() {
+    let number = number.trim();
+    let mult: u128 = match unit.trim().to_ascii_lowercase().as_str() {
         "" | "b" => 1,
-        "k" | "kb" | "kib" => 1000,
-        "m" | "mb" | "mib" => 1000 * 1000,
-        "g" | "gb" | "gib" => 1000 * 1000 * 1000,
-        "t" | "tb" | "tib" => 1000 * 1000 * 1000 * 1000,
+        "k" | "kb" => 1000,
+        "kib" => 1024,
+        "m" | "mb" => 1000_u128.pow(2),
+        "mib" => 1024_u128.pow(2),
+        "g" | "gb" => 1000_u128.pow(3),
+        "gib" => 1024_u128.pow(3),
+        "t" | "tb" => 1000_u128.pow(4),
+        "tib" => 1024_u128.pow(4),
         _ => return None,
     };
-    Some((number * mult as f64).round() as u64)
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    if whole.is_empty() && fraction.is_empty() {
+        return None;
+    }
+    if !whole
+        .chars()
+        .chain(fraction.chars())
+        .all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    let scale = 10_u128.checked_pow(fraction.len().try_into().ok()?)?;
+    let whole: u128 = if whole.is_empty() {
+        0
+    } else {
+        whole.parse().ok()?
+    };
+    let fraction: u128 = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse().ok()?
+    };
+    let numerator = whole
+        .checked_mul(scale)?
+        .checked_add(fraction)?
+        .checked_mul(mult)?;
+    let value = numerator.checked_add(scale / 2)? / scale;
+    u64::try_from(value).ok()
 }
 
 pub fn kernel_name(device: &str) -> &str {
@@ -77,5 +105,28 @@ mod tests {
         assert_eq!(parse_size("512M"), Some(512_000_000));
         assert_eq!(kernel_name("/dev/nvme0n1p2"), "nvme0n1p2");
         assert_eq!(c_string(b"UUID=abc\0junk"), "UUID=abc");
+    }
+}
+
+#[cfg(test)]
+mod size_regressions {
+    use super::*;
+    #[test]
+    fn binary_units_and_boundaries() {
+        assert_eq!(parse_size("1 GiB"), Some(1 << 30));
+        assert_eq!(parse_size("1.5 MiB"), Some(1572864));
+        assert_eq!(parse_size("18446744073709551615"), Some(u64::MAX));
+        for invalid in [
+            "NaN",
+            "inf",
+            "-1",
+            "1e20",
+            "18446744073709551616",
+            "999999999999TiB",
+            "1..2G",
+            "+1",
+        ] {
+            assert_eq!(parse_size(invalid), None, "{invalid}");
+        }
     }
 }

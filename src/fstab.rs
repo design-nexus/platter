@@ -3,7 +3,14 @@
 use std::fmt::Write as _;
 
 const NETWORK_TYPES: &[&str] = &[
-    "cifs", "smb", "nfs", "nfs4", "fuse.sshfs", "sshfs", "davfs", "fuse.rclone",
+    "cifs",
+    "smb",
+    "nfs",
+    "nfs4",
+    "fuse.sshfs",
+    "sshfs",
+    "davfs",
+    "fuse.rclone",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,7 +228,7 @@ fn previous_id(lines: &[String], index: usize) -> Option<String> {
         return None;
     }
     let prev = lines[index - 1].trim();
-    prev.strip_prefix("# disktui:")
+    prev.strip_prefix("# platter:")
         .map(|rest| rest.trim().to_string())
         .filter(|id| !id.is_empty())
 }
@@ -261,7 +268,7 @@ pub fn transform(original: &str, change: &Change) -> String {
             target,
             line,
         } => {
-            let comment = format!("# disktui: {id}");
+            let comment = format!("# platter: {id}");
             if let Some(idx) = find_entry(&lines, id, source, target) {
                 let start = comment_start(&lines, idx);
                 lines.splice(start..=idx, [comment, line.clone()]);
@@ -278,7 +285,10 @@ pub fn transform(original: &str, change: &Change) -> String {
         }
     }
     let mut out = lines.join("\n");
-    if (newline_at_eof || matches!(change, Change::Upsert { .. })) && !out.is_empty() && !out.ends_with('\n') {
+    if (newline_at_eof || matches!(change, Change::Upsert { .. }))
+        && !out.is_empty()
+        && !out.ends_with('\n')
+    {
         out.push('\n');
     }
     if original.is_empty() && matches!(change, Change::Delete { .. }) {
@@ -296,19 +306,19 @@ fn lines_of(text: &str) -> Vec<String> {
 }
 
 fn comment_start(lines: &[String], idx: usize) -> usize {
-    if idx > 0 && is_disktui_comment(&lines[idx - 1]) {
+    if idx > 0 && is_platter_comment(&lines[idx - 1]) {
         idx - 1
     } else {
         idx
     }
 }
 
-fn is_disktui_comment(line: &str) -> bool {
-    line.trim().starts_with("# disktui:")
+fn is_platter_comment(line: &str) -> bool {
+    line.trim().starts_with("# platter:")
 }
 
 fn find_entry(lines: &[String], id: &str, source: &str, target: &str) -> Option<usize> {
-    let marker = format!("# disktui: {id}");
+    let marker = format!("# platter: {id}");
     for (i, line) in lines.iter().enumerate() {
         if line.trim() == marker {
             if let Some(j) = ((i + 1)..lines.len()).find(|j| parse_entry(&lines[*j]).is_some()) {
@@ -355,7 +365,11 @@ pub fn normalize_source(input: &str, current_proto: &str) -> (String, String, Op
         if let Some((host, path)) = s.split_once(":/") {
             format!("{}:/{}", host.trim_matches('/'), path)
         } else if let Some((host, path)) = s.split_once(':') {
-            format!("{}:/{}", host.trim_matches('/'), path.trim_start_matches('/'))
+            format!(
+                "{}:/{}",
+                host.trim_matches('/'),
+                path.trim_start_matches('/')
+            )
         } else if let Some((host, path)) = s.trim_start_matches('/').split_once('/') {
             format!("{}:/{}", host, path)
         } else {
@@ -390,7 +404,9 @@ pub fn extract_share_name(source: &str) -> Option<String> {
     };
     last_seg
         .map(|s| s.trim_matches('/').trim_matches('\\').to_string())
-        .filter(|s| !s.is_empty() && !s.contains(':') && !s.starts_with('/') && !s.starts_with('\\'))
+        .filter(|s| {
+            !s.is_empty() && !s.contains(':') && !s.starts_with('/') && !s.starts_with('\\')
+        })
 }
 
 pub fn plan_share(draft: &ShareDraft) -> Result<SharePlan, String> {
@@ -421,7 +437,11 @@ pub fn plan_share(draft: &ShareDraft) -> Result<SharePlan, String> {
     }
     let id = {
         let raw = draft.id.trim();
-        let id = if raw.is_empty() { slug(&target) } else { slug(raw) };
+        let id = if raw.is_empty() {
+            slug(&target)
+        } else {
+            slug(raw)
+        };
         if id.is_empty() {
             return Err("Share id is empty.".into());
         }
@@ -599,7 +619,12 @@ pub fn sh_quote(value: &str) -> String {
     out
 }
 
-pub fn render_script(backup: &str, plan_contents: &str, creds: Option<&CredWrite>, mount: Option<&str>) -> String {
+pub fn render_script(
+    backup: &str,
+    plan_contents: &str,
+    creds: Option<&CredWrite>,
+    mount: Option<&str>,
+) -> String {
     let mut script = String::from("set -eu\n");
     let _ = writeln!(script, "cp -a /etc/fstab {}", sh_quote(backup));
     if let Some(cred) = creds {
@@ -608,20 +633,20 @@ pub fn render_script(backup: &str, plan_contents: &str, creds: Option<&CredWrite
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "/etc/samba".into());
         let _ = writeln!(script, "install -d -m 755 {}", sh_quote(&dir));
-        let _ = writeln!(script, "cat > {} << 'DISKTUI_CRED'", sh_quote(&cred.path));
+        let _ = writeln!(script, "cat > {} << 'PLATTER_CRED'", sh_quote(&cred.path));
         script.push_str(&cred.contents);
         if !cred.contents.ends_with('\n') {
             script.push('\n');
         }
-        script.push_str("DISKTUI_CRED\n");
+        script.push_str("PLATTER_CRED\n");
         let _ = writeln!(script, "chmod 600 {}", sh_quote(&cred.path));
     }
-    script.push_str("cat > /etc/fstab << 'DISKTUI_FSTAB'\n");
+    script.push_str("cat > /etc/fstab << 'PLATTER_FSTAB'\n");
     script.push_str(plan_contents);
     if !plan_contents.ends_with('\n') {
         script.push('\n');
     }
-    script.push_str("DISKTUI_FSTAB\n");
+    script.push_str("PLATTER_FSTAB\n");
     script.push_str("chmod 644 /etc/fstab\n");
     if let Some(target) = mount {
         let _ = writeln!(script, "install -d -m 755 {}", sh_quote(target));
@@ -632,15 +657,24 @@ pub fn render_script(backup: &str, plan_contents: &str, creds: Option<&CredWrite
 
 pub fn explain_mount_error(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
-    if lower.contains("no route to host") || lower.contains("network is unreachable") || lower.contains("error(113)") {
-        "Could not reach server. Check that your NAS is powered on and IP/address is correct.".into()
-    } else if lower.contains("permission denied") || lower.contains("error(13)") || lower.contains("logon failure") {
+    if lower.contains("no route to host")
+        || lower.contains("network is unreachable")
+        || lower.contains("error(113)")
+    {
+        "Could not reach server. Check that your NAS is powered on and IP/address is correct."
+            .into()
+    } else if lower.contains("permission denied")
+        || lower.contains("error(13)")
+        || lower.contains("logon failure")
+    {
         "Access denied. Check your username, password, or server share permissions.".into()
     } else if lower.contains("no such file or directory") || lower.contains("error(2)") {
         "Share not found. Check that the share folder name on the server is correct.".into()
     } else if lower.contains("connection refused") || lower.contains("error(111)") {
         "Connection refused. The server is not accepting connections for this protocol.".into()
-    } else if lower.contains("mount.cifs: command not found") || lower.contains("cannot find mount.cifs") {
+    } else if lower.contains("mount.cifs: command not found")
+        || lower.contains("cannot find mount.cifs")
+    {
         "cifs-utils is not installed. Install with: sudo pacman -S cifs-utils".into()
     } else if lower.contains("mount.nfs: command not found") {
         "nfs-utils is not installed. Install with: sudo pacman -S nfs-utils".into()
@@ -689,7 +723,9 @@ UUID=0356-B9FA  /boot  vfat  rw,relatime  0  2\n\
     fn upsert_preserves_unrelated_lines() {
         let plan = plan_share(&draft()).unwrap();
         assert!(!plan.entry_line.contains("s3cret"));
-        assert!(plan.entry_line.contains("credentials=/etc/samba/credentials-mnt-media"));
+        assert!(plan
+            .entry_line
+            .contains("credentials=/etc/samba/credentials-mnt-media"));
         let next = transform(
             SAMPLE,
             &Change::Upsert {
@@ -699,9 +735,11 @@ UUID=0356-B9FA  /boot  vfat  rw,relatime  0  2\n\
                 line: plan.entry_line.clone(),
             },
         );
-        assert!(next.contains("UUID=9574fe74-248e-45d8-bdbf-269b1ddcfd9f\t/\tbtrfs\trw,relatime,subvol=/@\t0\t0\n"));
+        assert!(next.contains(
+            "UUID=9574fe74-248e-45d8-bdbf-269b1ddcfd9f\t/\tbtrfs\trw,relatime,subvol=/@\t0\t0\n"
+        ));
         assert!(next.contains("UUID=0356-B9FA  /boot  vfat  rw,relatime  0  2\n"));
-        assert!(next.contains("# disktui: mnt-media\n"));
+        assert!(next.contains("# platter: mnt-media\n"));
         assert!(next.contains(&plan.entry_line));
         let again = transform(
             &next,
@@ -712,7 +750,7 @@ UUID=0356-B9FA  /boot  vfat  rw,relatime  0  2\n\
                 line: "//nas/media /mnt/photos cifs credentials=/etc/samba/credentials-mnt-media,_netdev 0 0".into(),
             },
         );
-        assert_eq!(again.matches("# disktui:").count(), 1);
+        assert_eq!(again.matches("# platter:").count(), 1);
         assert!(again.contains("/mnt/photos"));
         assert!(!again.contains("/mnt/media cifs"));
         assert!(again.contains("subvol=/@"));
@@ -775,7 +813,7 @@ UUID=0356-B9FA  /boot  vfat  rw,relatime  0  2\n\
             },
         );
         assert_eq!(next.matches("nas:/export").count(), 1);
-        assert!(next.contains("# disktui:"));
+        assert!(next.contains("# platter:"));
         let shares = network_shares(&next);
         assert_eq!(shares.len(), 1);
         assert_eq!(shares[0].fstype, "nfs");

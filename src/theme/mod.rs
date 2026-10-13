@@ -12,6 +12,7 @@ pub enum Kind {
 
 /// Semantic colors shared by every screen.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct Theme {
     pub id: String,
     pub name: String,
@@ -76,6 +77,10 @@ pub struct Choice {
 }
 
 pub static CHOICES: &[Choice] = &[
+    Choice {
+        id: "aurora",
+        label: "Aurora",
+    },
     Choice {
         id: "omarchy",
         label: "Follow Omarchy",
@@ -160,6 +165,7 @@ pub fn known(id: &str) -> bool {
 
 pub fn by_id(id: &str) -> Option<Theme> {
     Some(match id {
+        "aurora" => aurora(),
         "terminal" => terminal(),
         "catppuccin-mocha" => mocha(),
         "catppuccin-macchiato" => macchiato(),
@@ -195,12 +201,8 @@ pub fn resolve(id: &str, omarchy: Option<&Theme>, custom: Option<&Theme>) -> The
     by_id(id).unwrap_or_else(tokyo_night)
 }
 
-pub fn fallback_id(omarchy_installed: bool) -> &'static str {
-    if omarchy_installed {
-        "omarchy"
-    } else {
-        "tokyo-night"
-    }
+pub fn fallback_id(_omarchy_installed: bool) -> &'static str {
+    "aurora"
 }
 
 fn terminal() -> Theme {
@@ -527,4 +529,18 @@ mod tests {
         let gap = (luminance(theme.selection) - luminance(theme.selection_fg)).abs();
         assert!(gap >= 90.0, "gap {gap}");
     }
+}
+
+pub fn aurora() -> Theme {
+    let mut theme = pal(
+        "aurora",
+        "Aurora",
+        Kind::Dark,
+        [
+            "171820", "14151d", "222432", "3d4054", "222432", "ececf4", "a5a9be", "a5a9be",
+            "b5a0ff", "ed8796", "eac38c", "a3d6b0", "83d9dc", "b5a0ff", "b5a0ff",
+        ],
+    );
+    theme.selection_fg = theme.accent;
+    theme
 }

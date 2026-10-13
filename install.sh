@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Build disktui and install the binary.
+# Build platter and install the binary.
 # From a clone:  ./install.sh
-# From the web:  curl -fsSL https://raw.githubusercontent.com/design-nexus/disktui/main/install.sh | bash
+# From the web:  curl -fsSL https://raw.githubusercontent.com/design-nexus/platter/main/install.sh | bash
 # Optional:      ./install.sh --prefix "$HOME/.local"
 
 set -euo pipefail
 
 PREFIX="${HOME}/.local"
-REPO="https://github.com/design-nexus/disktui.git"
+REPO="https://github.com/design-nexus/platter.git"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -21,7 +21,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     -h|--help)
       echo "Usage: install.sh [--prefix DIR]"
-      echo "Installs the disktui binary into DIR/bin. Default DIR is ~/.local."
+      echo "Installs the platter binary into DIR/bin. Default DIR is ~/.local."
       exit 0
       ;;
     *)
@@ -47,29 +47,29 @@ source_dir=""
 script_path="${BASH_SOURCE[0]:-}"
 if [[ -n "$script_path" && -f "$script_path" ]]; then
   candidate="$(cd "$(dirname "$script_path")" && pwd)"
-  if [[ -f "$candidate/Cargo.toml" ]] && grep -q 'name = "disktui"' "$candidate/Cargo.toml"; then
+  if [[ -f "$candidate/Cargo.toml" ]] && grep -q 'name = "platter"' "$candidate/Cargo.toml"; then
     source_dir="$candidate"
   fi
 fi
 
 if [[ -z "$source_dir" ]]; then
   if ! command -v git >/dev/null 2>&1; then
-    echo "git was not found, and this script is not inside a disktui checkout." >&2
+    echo "git was not found, and this script is not inside a platter checkout." >&2
     exit 1
   fi
   CLONE_DIR="$(mktemp -d)"
   echo "Cloning $REPO"
-  git clone --depth 1 "$REPO" "$CLONE_DIR/disktui"
-  source_dir="$CLONE_DIR/disktui"
+  git clone --depth 1 "$REPO" "$CLONE_DIR/platter"
+  source_dir="$CLONE_DIR/platter"
 fi
 
 echo "Building release binary"
-cargo build --release --manifest-path "$source_dir/Cargo.toml"
+cargo build --release --locked --manifest-path "$source_dir/Cargo.toml"
 
 install -d "$PREFIX/bin"
-install -m 755 "$source_dir/target/release/disktui" "$PREFIX/bin/disktui"
+install -m 755 "$source_dir/target/release/platter" "$PREFIX/bin/platter"
 
-echo "Installed $PREFIX/bin/disktui"
+echo "Installed $PREFIX/bin/platter"
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
   *)
@@ -77,4 +77,4 @@ case ":$PATH:" in
     echo "  export PATH=\"$PREFIX/bin:\$PATH\""
     ;;
 esac
-echo "Run: disktui"
+echo "Run: platter"

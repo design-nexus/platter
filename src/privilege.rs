@@ -26,10 +26,7 @@ pub fn run(job: &SudoJob) -> Result<String, String> {
             creds,
             mount,
         } => {
-            let backup = format!(
-                "/etc/fstab.bak.{}",
-                chrono_stamp()
-            );
+            let backup = format!("/etc/fstab.bak.{}", chrono_stamp());
             fstab::render_script(&backup, contents, creds.as_ref(), mount.as_deref())
         }
         SudoJob::Mount(target) => format!(
@@ -53,7 +50,7 @@ pub fn pause() -> Result<(), String> {
     let _ = out.execute(crossterm::cursor::Show);
     let _ = writeln!(
         out,
-        "disktui needs administrator permission. sudo will ask for your password."
+        "platter needs administrator permission. sudo will ask for your password."
     );
     let _ = out.flush();
     Ok(())

@@ -11,7 +11,7 @@ pub struct Config {
 }
 
 fn default_theme() -> String {
-    "omarchy".into()
+    "aurora".into()
 }
 
 impl Default for Config {
@@ -49,5 +49,18 @@ impl Config {
             std::fs::create_dir_all(dir)?;
         }
         std::fs::write(path, toml::to_string_pretty(self).unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+mod aurora_persistence {
+    use super::*;
+    #[test]
+    fn defaults_and_explicit_choices() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        assert_eq!(Config::default().theme, "aurora");
+        std::fs::write(&path, "theme = \"terminal\"\n").unwrap();
+        assert_eq!(Config::load(&path, true).theme, "terminal");
     }
 }

@@ -78,11 +78,26 @@ async fn dispatch(conn: &Connection, op: Op, tx: &UnboundedSender<Msg>) -> Resul
             call_unit(conn, &path, PART, "Delete", &options).await?;
             Ok("Partition deleted.".into())
         }
-        Op::Resize { path, current, new_size, filesystem } => {
-            resize(conn, &path, current, new_size, filesystem).await
-        }
-        Op::EditPartition { path, type_code, name, flags } => {
-            call_unit_body(conn, &path, PART, "SetType", &(type_code.as_str(), &empty_map())).await?;
+        Op::Resize {
+            path,
+            current,
+            new_size,
+            filesystem,
+        } => resize(conn, &path, current, new_size, filesystem).await,
+        Op::EditPartition {
+            path,
+            type_code,
+            name,
+            flags,
+        } => {
+            call_unit_body(
+                conn,
+                &path,
+                PART,
+                "SetType",
+                &(type_code.as_str(), &empty_map()),
+            )
+            .await?;
             call_unit_body(conn, &path, PART, "SetName", &(name.as_str(), &empty_map())).await?;
             call_unit_body(conn, &path, PART, "SetFlags", &(flags, &empty_map())).await?;
             Ok("Partition updated.".into())
@@ -127,22 +142,54 @@ async fn dispatch(conn: &Connection, op: Op, tx: &UnboundedSender<Msg>) -> Resul
             Ok("Locked.".into())
         }
         Op::ChangePassphrase { path, old, new } => {
-            call_unit_body(conn, &path, ENC, "ChangePassphrase", &(old.as_str(), new.as_str(), &empty_map())).await?;
+            call_unit_body(
+                conn,
+                &path,
+                ENC,
+                "ChangePassphrase",
+                &(old.as_str(), new.as_str(), &empty_map()),
+            )
+            .await?;
             Ok("Passphrase changed.".into())
         }
         Op::HeaderBackup { path, file } => {
-            call_unit_body(conn, &path, ENC, "HeaderBackup", &(file.as_str(), &empty_map())).await?;
+            call_unit_body(
+                conn,
+                &path,
+                ENC,
+                "HeaderBackup",
+                &(file.as_str(), &empty_map()),
+            )
+            .await?;
             Ok(format!("Header saved to {file}."))
         }
         Op::RestoreHeader { path, file } => {
-            call_unit_body(conn, &path, BLOCK, "RestoreEncryptedHeader", &(file.as_str(), &empty_map())).await?;
+            call_unit_body(
+                conn,
+                &path,
+                BLOCK,
+                "RestoreEncryptedHeader",
+                &(file.as_str(), &empty_map()),
+            )
+            .await?;
             Ok("LUKS header restored.".into())
         }
         Op::ConvertLuks { path, version } => {
-            call_unit_body(conn, &path, ENC, "Convert", &(version.as_str(), &empty_map())).await?;
+            call_unit_body(
+                conn,
+                &path,
+                ENC,
+                "Convert",
+                &(version.as_str(), &empty_map()),
+            )
+            .await?;
             Ok(format!("Converted to {version}."))
         }
-        Op::ResizeLuks { path, size, passphrase } => {
+        Op::ResizeLuks {
+            path,
+            size,
+            passphrase,
+        } => {
             let mut options = HashMap::new();
             options.insert("passphrase", Value::from(passphrase));
             call_unit_body(conn, &path, ENC, "Resize", &(size, options)).await?;
@@ -185,7 +232,14 @@ async fn dispatch(conn: &Connection, op: Op, tx: &UnboundedSender<Msg>) -> Resul
         Op::Smart { path, nvme } => smart_text(conn, &path, nvme, tx).await,
         Op::SmartTest { path, kind, nvme } => {
             let iface = if nvme { NVME } else { ATA };
-            call_unit_body(conn, &path, iface, "SmartSelftestStart", &(kind.as_str(), &empty_map())).await?;
+            call_unit_body(
+                conn,
+                &path,
+                iface,
+                "SmartSelftestStart",
+                &(kind.as_str(), &empty_map()),
+            )
+            .await?;
             Ok(format!("{kind} self-test started."))
         }
         Op::SmartAbort { path, nvme } => {
@@ -200,10 +254,24 @@ async fn dispatch(conn: &Connection, op: Op, tx: &UnboundedSender<Msg>) -> Resul
             Ok("Secure erase finished.".into())
         }
         Op::Sanitize { path, action } => {
-            call_unit_body(conn, &path, NVME, "SanitizeStart", &(action.as_str(), &empty_map())).await?;
-            Ok(format!("NVMe sanitize ({action}) started. It cannot be cancelled."))
+            call_unit_body(
+                conn,
+                &path,
+                NVME,
+                "SanitizeStart",
+                &(action.as_str(), &empty_map()),
+            )
+            .await?;
+            Ok(format!(
+                "NVMe sanitize ({action}) started. It cannot be cancelled."
+            ))
         }
-        Op::RaidCreate { devices, level, name, chunk } => {
+        Op::RaidCreate {
+            devices,
+            level,
+            name,
+            chunk,
+        } => {
             let paths: Vec<OwnedObjectPath> = devices
                 .iter()
                 .map(|p| OwnedObjectPath::try_from(p.as_str()))
@@ -211,7 +279,10 @@ async fn dispatch(conn: &Connection, op: Op, tx: &UnboundedSender<Msg>) -> Resul
                 .map_err(|e| anyhow!(e))?;
             let proxy = proxy(conn, "/org/freedesktop/UDisks2", MGR).await?;
             let created: OwnedObjectPath = proxy
-                .call("MDRaidCreate", &(paths, level.as_str(), name.as_str(), chunk, &empty_map()))
+                .call(
+                    "MDRaidCreate",
+                    &(paths, level.as_str(), name.as_str(), chunk, &empty_map()),
+                )
                 .await
                 .map_err(|e| anyhow!(e))?;
             Ok(format!("RAID array created at {created}."))
@@ -234,15 +305,24 @@ async fn dispatch(conn: &Connection, op: Op, tx: &UnboundedSender<Msg>) -> Resul
             call_unit(conn, &path, RAID, "Delete", &options).await?;
             Ok("RAID array deleted.".into())
         }
-        Op::Benchmark { path, write, size, cancel } => {
-            benchmark(conn, &path, write, size, &cancel, tx).await
-        }
-        Op::Backup { path, file, size, cancel } => {
-            image_copy(conn, &path, &file, size, false, &cancel, tx).await
-        }
-        Op::Restore { path, file, size, cancel } => {
-            image_copy(conn, &path, &file, size, true, &cancel, tx).await
-        }
+        Op::Benchmark {
+            path,
+            write,
+            size,
+            cancel,
+        } => benchmark(conn, &path, write, size, &cancel, tx).await,
+        Op::Backup {
+            path,
+            file,
+            size,
+            cancel,
+        } => image_copy(conn, &path, &file, size, false, &cancel, tx).await,
+        Op::Restore {
+            path,
+            file,
+            size,
+            cancel,
+        } => image_copy(conn, &path, &file, size, true, &cancel, tx).await,
         Op::Rescan(path) => {
             call_unit(conn, &path, BLOCK, "Rescan", &empty()).await?;
             Ok("Rescanned.".into())
@@ -271,7 +351,14 @@ async fn format_device(conn: &Connection, req: &FormatReq) -> Result<String> {
         options.insert("encrypt.passphrase", Value::from(req.passphrase.as_str()));
         options.insert("encrypt.type", Value::from("luks2"));
     }
-    call_unit_body(conn, &req.path, BLOCK, "Format", &(req.kind.as_str(), options)).await?;
+    call_unit_body(
+        conn,
+        &req.path,
+        BLOCK,
+        "Format",
+        &(req.kind.as_str(), options),
+    )
+    .await?;
     Ok(format!("Formatted as {}.", req.kind))
 }
 
@@ -285,7 +372,13 @@ async fn create_partition(conn: &Connection, req: &CreateReq) -> Result<String> 
         let created: OwnedObjectPath = proxy
             .call(
                 "CreatePartition",
-                &(req.offset, req.size, req.type_code.as_str(), req.name.as_str(), options),
+                &(
+                    req.offset,
+                    req.size,
+                    req.type_code.as_str(),
+                    req.name.as_str(),
+                    options,
+                ),
             )
             .await
             .map_err(|e| anyhow!(e))?;
@@ -320,7 +413,13 @@ async fn create_partition(conn: &Connection, req: &CreateReq) -> Result<String> 
     Ok(format!("Partition created and formatted at {created}."))
 }
 
-async fn resize(conn: &Connection, path: &str, current: u64, new_size: u64, filesystem: bool) -> Result<String> {
+async fn resize(
+    conn: &Connection,
+    path: &str,
+    current: u64,
+    new_size: u64,
+    filesystem: bool,
+) -> Result<String> {
     let grow = new_size == 0 || new_size > current;
     if filesystem && !grow {
         call_unit_body(conn, path, FS, "Resize", &(new_size, &empty_map())).await?;
@@ -331,7 +430,11 @@ async fn resize(conn: &Connection, path: &str, current: u64, new_size: u64, file
             call_unit_body(conn, path, FS, "Resize", &(0u64, &empty_map())).await?;
         }
     }
-    let label = if new_size == 0 { "maximum".into() } else { human_size(new_size) };
+    let label = if new_size == 0 {
+        "maximum".into()
+    } else {
+        human_size(new_size)
+    };
     Ok(format!("Resized to {label}."))
 }
 
@@ -358,7 +461,12 @@ async fn write_mount_options(conn: &Connection, req: &MountOptReq) -> Result<Str
             .await
             .map_err(|e| anyhow!(e))?;
     }
-    for extra in req.existing.iter().filter(|item| item.kind == "fstab").skip(1) {
+    for extra in req
+        .existing
+        .iter()
+        .filter(|item| item.kind == "fstab")
+        .skip(1)
+    {
         let _ = remove_one(conn, &req.path, extra).await;
     }
     Ok(format!("fstab now mounts this volume at {}.", req.dir))
@@ -378,7 +486,14 @@ async fn remove_fstab(conn: &Connection, path: &str, items: &[ConfigItem]) -> Re
 
 async fn remove_one(conn: &Connection, path: &str, item: &ConfigItem) -> Result<()> {
     let value = config_value(item)?;
-    call_unit_body(conn, path, BLOCK, "RemoveConfigurationItem", &(value, &empty_map())).await
+    call_unit_body(
+        conn,
+        path,
+        BLOCK,
+        "RemoveConfigurationItem",
+        &(value, &empty_map()),
+    )
+    .await
 }
 
 fn config_value(item: &ConfigItem) -> Result<(&str, HashMap<String, OwnedValue>)> {
@@ -413,7 +528,12 @@ fn props_to_map(pairs: &[(String, PropVal)]) -> Result<HashMap<String, OwnedValu
     Ok(map)
 }
 
-async fn loop_setup(conn: &Connection, file: &str, read_only: bool, tx: &UnboundedSender<Msg>) -> Result<String> {
+async fn loop_setup(
+    conn: &Connection,
+    file: &str,
+    read_only: bool,
+    tx: &UnboundedSender<Msg>,
+) -> Result<String> {
     let handle = std::fs::File::open(file).with_context(|| format!("open {file}"))?;
     let fd = Fd::from(&handle);
     let mut options = HashMap::new();
@@ -428,9 +548,24 @@ async fn loop_setup(conn: &Connection, file: &str, read_only: bool, tx: &Unbound
     Ok(format!("Attached {file}."))
 }
 
-type AtaAttr = (u8, String, u16, i32, i32, i32, i64, i32, HashMap<String, OwnedValue>);
+type AtaAttr = (
+    u8,
+    String,
+    u16,
+    i32,
+    i32,
+    i32,
+    i64,
+    i32,
+    HashMap<String, OwnedValue>,
+);
 
-async fn smart_text(_conn: &Connection, path: &str, nvme: bool, tx: &UnboundedSender<Msg>) -> Result<String> {
+async fn smart_text(
+    _conn: &Connection,
+    path: &str,
+    nvme: bool,
+    tx: &UnboundedSender<Msg>,
+) -> Result<String> {
     // Own socket. The app connection's reader stalls when the disk list is refreshing.
     let conn = zbus::connection::Builder::system()
         .context("system bus")?
@@ -465,9 +600,12 @@ async fn smart_text(_conn: &Connection, path: &str, nvme: bool, tx: &UnboundedSe
 }
 
 fn format_ata_rows(rows: &[AtaAttr]) -> String {
-    let mut lines = vec!["id  attribute                         value  worst  threshold  raw".to_string()];
+    let mut lines =
+        vec!["id  attribute                         value  worst  threshold  raw".to_string()];
     for (id, name, _flags, value, worst, threshold, pretty, _unit, _) in rows {
-        lines.push(format!("{id:<3} {name:<32} {value:>6} {worst:>6} {threshold:>10} {pretty:>8}"));
+        lines.push(format!(
+            "{id:<3} {name:<32} {value:>6} {worst:>6} {threshold:>10} {pretty:>8}"
+        ));
     }
     if rows.is_empty() {
         lines.push("No ATA SMART attributes.".into());
@@ -544,17 +682,24 @@ fn nvme_value(key: &str, raw: &OwnedValue) -> String {
             Some(n) => human_size(n as u64),
             None => scalar(value),
         },
-        "power_cycles" | "unsafe_shutdowns" | "media_errors" | "num_err_log_entries" => match number(value) {
-            Some(n) => n.to_string(),
-            None => scalar(value),
-        },
+        "power_cycles" | "unsafe_shutdowns" | "media_errors" | "num_err_log_entries" => {
+            match number(value) {
+                Some(n) => n.to_string(),
+                None => scalar(value),
+            }
+        }
         "ctrl_busy_time" | "warning_temp_time" | "critical_temp_time" => match number(value) {
             Some(n) => format!("{n} min"),
             None => scalar(value),
         },
         "wctemp" | "cctemp" => kelvin(value),
         "temp_sensors" => match value {
-            Value::Array(array) => array.inner().iter().map(kelvin).collect::<Vec<_>>().join(", "),
+            Value::Array(array) => array
+                .inner()
+                .iter()
+                .map(kelvin)
+                .collect::<Vec<_>>()
+                .join(", "),
             other => kelvin(other),
         },
         _ => scalar(value),
@@ -685,7 +830,7 @@ fn transfer_device(
             return Err(anyhow!("cancelled"));
         }
         let n = if write {
-            device.write_at(buf, offset).context("write")? 
+            device.write_at(buf, offset).context("write")?
         } else {
             device.read_at(buf, offset).context("read")?
         };
@@ -696,7 +841,11 @@ fn transfer_device(
             image.write_all(&buf[..n])?;
         }
         offset += n as u64;
-        let ratio = if size == 0 { 0.0 } else { offset as f64 / size as f64 };
+        let ratio = if size == 0 {
+            0.0
+        } else {
+            offset as f64 / size as f64
+        };
         let secs = started.elapsed().as_secs_f64().max(0.001);
         let mbps = (offset as f64 / secs) / 1_000_000.0;
         let bucket = (ratio * 160.0) as usize;
@@ -742,7 +891,11 @@ fn copy_streams(
         }
         writer.write_all(&buf[..n])?;
         offset += n as u64;
-        let ratio = if total == 0 { 1.0 } else { offset as f64 / total as f64 };
+        let ratio = if total == 0 {
+            1.0
+        } else {
+            offset as f64 / total as f64
+        };
         let secs = started.elapsed().as_secs_f64().max(0.001);
         let mbps = (offset as f64 / secs) / 1_000_000.0;
         let _ = tx.send(Msg::Sample { pos: ratio, mbps });
@@ -764,7 +917,9 @@ fn empty_map() -> HashMap<&'static str, Value<'static>> {
     HashMap::new()
 }
 
-fn options_as_value(options: &HashMap<String, OwnedValue>) -> Result<HashMap<String, Value<'static>>> {
+fn options_as_value(
+    options: &HashMap<String, OwnedValue>,
+) -> Result<HashMap<String, Value<'static>>> {
     let mut out = HashMap::new();
     for (key, value) in options {
         let cloned = zbus::zvariant::Value::try_clone(value).map_err(|e| anyhow!(e))?;
@@ -833,7 +988,10 @@ mod tests {
     fn nvme_attributes_are_readable() {
         let mut attrs = HashMap::new();
         attrs.insert("percent_used".into(), super::super::owned(7u8).unwrap());
-        attrs.insert("total_data_read".into(), super::super::owned(1_500_000_000u64).unwrap());
+        attrs.insert(
+            "total_data_read".into(),
+            super::super::owned(1_500_000_000u64).unwrap(),
+        );
         attrs.insert("wctemp".into(), super::super::owned(353u16).unwrap());
         let text = format_nvme_map(&attrs);
         assert!(text.contains("Percent used"), "{text}");
@@ -842,5 +1000,3 @@ mod tests {
         assert!(text.contains("80 °C"), "{text}");
     }
 }
-
-

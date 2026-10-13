@@ -522,12 +522,7 @@ impl Model {
         let mut spec = Vec::new();
         for part in &parts {
             let p = part.partition.as_ref().unwrap();
-            spec.push((
-                p.offset,
-                p.size,
-                part.path.clone(),
-                short_part(part),
-            ));
+            spec.push((p.offset, p.size, part.path.clone(), short_part(part)));
         }
         for segment in segments(disk.size, &spec) {
             if segment.free {
@@ -545,10 +540,14 @@ impl Model {
                 continue;
             }
             let Some(path) = segment.block else { continue };
-            let Some(block) = self.block(&path) else { continue };
+            let Some(block) = self.block(&path) else {
+                continue;
+            };
             used.insert(path.clone());
             rows.push(Row {
-                kind: RowKind::Volume { block: path.clone() },
+                kind: RowKind::Volume {
+                    block: path.clone(),
+                },
                 depth: 1,
                 label: volume_label(block),
                 size: human_size(block.size),
@@ -570,9 +569,7 @@ impl Model {
     }
 
     fn cleartext_of(&self, encrypted: &str) -> Option<&Block> {
-        self.blocks
-            .iter()
-            .find(|b| b.crypto_backing == encrypted)
+        self.blocks.iter().find(|b| b.crypto_backing == encrypted)
     }
 
     fn tree_mounted(&self, path: &str) -> bool {
@@ -621,10 +618,25 @@ impl Model {
             RowKind::Shares => {}
             RowKind::Raid { raid } => {
                 if let Some(raid) = self.raid(raid) {
-                    push(&mut out, ActionId::RaidStart, !raid.running, "Already running");
-                    push(&mut out, ActionId::RaidStop, raid.running, "Array is stopped");
+                    push(
+                        &mut out,
+                        ActionId::RaidStart,
+                        !raid.running,
+                        "Already running",
+                    );
+                    push(
+                        &mut out,
+                        ActionId::RaidStop,
+                        raid.running,
+                        "Array is stopped",
+                    );
                     push(&mut out, ActionId::RaidDelete, true, "");
-                    push(&mut out, ActionId::Benchmark, raid.running, "Array is stopped");
+                    push(
+                        &mut out,
+                        ActionId::Benchmark,
+                        raid.running,
+                        "Array is stopped",
+                    );
                 }
             }
             RowKind::Free { .. } => {
@@ -657,8 +669,18 @@ impl Model {
                 }
                 if let Some(drive) = drive_obj {
                     let smart = drive.ata.as_ref().is_some_and(|a| a.smart_supported) || drive.nvme;
-                    push(&mut out, ActionId::Smart, smart, "This drive does not report SMART");
-                    push(&mut out, ActionId::SmartTest, smart, "This drive does not report SMART");
+                    push(
+                        &mut out,
+                        ActionId::Smart,
+                        smart,
+                        "This drive does not report SMART",
+                    );
+                    push(
+                        &mut out,
+                        ActionId::SmartTest,
+                        smart,
+                        "This drive does not report SMART",
+                    );
                     let ata = drive.ata.as_ref();
                     push(
                         &mut out,
@@ -684,14 +706,24 @@ impl Model {
                         ata.is_some_and(|a| a.secure_erase_minutes > 0),
                         "Secure erase is not available",
                     );
-                    push(&mut out, ActionId::Sanitize, drive.nvme, "Not an NVMe controller");
+                    push(
+                        &mut out,
+                        ActionId::Sanitize,
+                        drive.nvme,
+                        "Not an NVMe controller",
+                    );
                     push(
                         &mut out,
                         ActionId::PowerOff,
                         drive.can_power_off,
                         "This drive cannot be powered off",
                     );
-                    push(&mut out, ActionId::Eject, drive.ejectable, "Nothing to eject");
+                    push(
+                        &mut out,
+                        ActionId::Eject,
+                        drive.ejectable,
+                        "Nothing to eject",
+                    );
                     let _ = system;
                 }
                 push(&mut out, ActionId::AttachImage, true, "");
@@ -777,18 +809,33 @@ fn volume_actions(out: &mut Vec<Action>, model: &Model, caps: &Caps, block: &Blo
         push(out, ActionId::Unlock, true, "");
     }
     if block.encrypted {
-        push(out, ActionId::Lock, model.cleartext_of(&block.path).is_some() || is_set(&block.cleartext), "Volume is locked");
+        push(
+            out,
+            ActionId::Lock,
+            model.cleartext_of(&block.path).is_some() || is_set(&block.cleartext),
+            "Volume is locked",
+        );
         push(out, ActionId::ChangePassphrase, true, "");
         push(out, ActionId::HeaderBackup, true, "");
         push(out, ActionId::RestoreHeader, !mounted, "Unmount it first");
-        push(out, ActionId::ConvertLuks, model.cleartext_of(&block.path).is_none(), "Lock the volume first");
+        push(
+            out,
+            ActionId::ConvertLuks,
+            model.cleartext_of(&block.path).is_none(),
+            "Lock the volume first",
+        );
     }
     if block.filesystem {
         push(out, ActionId::Mount, !mounted, "Already mounted");
         push(out, ActionId::Unmount, mounted, "Not mounted");
         push(out, ActionId::MountOptions, true, "");
         push(out, ActionId::Label, true, "");
-        push(out, ActionId::TakeOwnership, mounted, "Mount the filesystem first");
+        push(
+            out,
+            ActionId::TakeOwnership,
+            mounted,
+            "Mount the filesystem first",
+        );
         let fs = block.id_type.as_str();
         let check = tool_ok(caps.check.get(fs));
         push(out, ActionId::Check, !mounted && check.0, &check.1);
@@ -796,7 +843,12 @@ fn volume_actions(out: &mut Vec<Action>, model: &Model, caps: &Caps, block: &Blo
         push(out, ActionId::Repair, !mounted && repair.0, &repair.1);
     }
     if block.swap {
-        push(out, ActionId::SwapOn, !block.swap_active, "Swap is already on");
+        push(
+            out,
+            ActionId::SwapOn,
+            !block.swap_active,
+            "Swap is already on",
+        );
         push(out, ActionId::SwapOff, block.swap_active, "Swap is off");
         push(out, ActionId::MountOptions, true, "");
         push(out, ActionId::Label, true, "");
@@ -824,10 +876,16 @@ fn volume_actions(out: &mut Vec<Action>, model: &Model, caps: &Caps, block: &Blo
         },
     );
     if block.partition.is_some() {
-        push(out, ActionId::Delete, !mounted && !block.swap_active, "Unmount it first");
+        push(
+            out,
+            ActionId::Delete,
+            !mounted && !block.swap_active,
+            "Unmount it first",
+        );
         push(out, ActionId::EditPartition, true, "");
         let resize = caps.resize.get(&block.id_type);
-        let can_resize = block.filesystem && resize.is_none_or(|c| c.available) || !block.filesystem;
+        let can_resize =
+            block.filesystem && resize.is_none_or(|c| c.available) || !block.filesystem;
         push(
             out,
             ActionId::Resize,
@@ -858,11 +916,16 @@ fn image_actions(out: &mut Vec<Action>, block: &Block) {
     let busy = !block.mount_points.is_empty() || block.swap_active;
     push(out, ActionId::Benchmark, !busy, "Unmount it first");
     push(out, ActionId::CreateImage, !busy, "Unmount it first");
-    push(out, ActionId::RestoreImage, !busy && !block.read_only, if block.read_only {
-        "Device is read-only"
-    } else {
-        "Unmount it first"
-    });
+    push(
+        out,
+        ActionId::RestoreImage,
+        !busy && !block.read_only,
+        if block.read_only {
+            "Device is read-only"
+        } else {
+            "Unmount it first"
+        },
+    );
 }
 
 fn push(out: &mut Vec<Action>, id: ActionId, enabled: bool, reason: impl AsRef<str>) {
@@ -908,7 +971,11 @@ pub fn fs_usage(path: &str) -> Option<(u64, u64)> {
         return None;
     }
     let stat = unsafe { stat.assume_init() };
-    let block_size = if stat.f_frsize > 0 { stat.f_frsize } else { stat.f_bsize };
+    let block_size = if stat.f_frsize > 0 {
+        stat.f_frsize
+    } else {
+        stat.f_bsize
+    };
     let total = stat.f_blocks.saturating_mul(block_size);
     let free = stat.f_bavail.saturating_mul(block_size);
     if total == 0 {
@@ -980,7 +1047,10 @@ pub fn partition_type_label(code: &str) -> String {
 }
 
 pub fn type_code_for(table: &str, label: &str) -> String {
-    let kind = PART_TYPES.iter().find(|k| k.label == label).unwrap_or(&PART_TYPES[0]);
+    let kind = PART_TYPES
+        .iter()
+        .find(|k| k.label == label)
+        .unwrap_or(&PART_TYPES[0]);
     if table == "dos" {
         kind.dos.to_string()
     } else {
@@ -1020,11 +1090,7 @@ pub fn volume_label(block: &Block) -> String {
         return format!("p{} {name}", part.number);
     }
     if block.loopback {
-        let file = block
-            .backing_file
-            .rsplit('/')
-            .next()
-            .unwrap_or("image");
+        let file = block.backing_file.rsplit('/').next().unwrap_or("image");
         return format!("loop {file}");
     }
     if !block.id_label.is_empty() {
@@ -1121,12 +1187,7 @@ mod tests {
 
     #[test]
     fn hides_the_leading_alignment_gap_and_keeps_real_free_space() {
-        let parts = vec![(
-            MIB,
-            50 * MIB,
-            "/b".into(),
-            "p1".into(),
-        )];
+        let parts = vec![(MIB, 50 * MIB, "/b".into(), "p1".into())];
         let segs = segments(100 * MIB, &parts);
         assert!(segs.iter().all(|s| s.start != 0 || !s.free));
         assert!(segs.iter().any(|s| s.free && s.start == 51 * MIB));

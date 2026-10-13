@@ -1,4 +1,7 @@
 mod app;
+#[cfg(test)]
+mod audit;
+mod commands;
 mod config;
 mod fstab;
 mod model;
@@ -24,14 +27,18 @@ use msg::Msg;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("platter {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let mut args = env::args().skip(1);
     let attach = args.next().filter(|arg| arg != "--help" && arg != "-h");
     if env::args().any(|arg| arg == "--help" || arg == "-h") {
-        println!("disktui [image-file]\n\nTerminal disk manager. See the README for keys.");
+        println!("platter [image-file]\n\nTerminal disk manager. See the README for keys.");
         return Ok(());
     }
     if !io::stdout().is_terminal() {
-        anyhow::bail!("disktui runs in a terminal.");
+        anyhow::bail!("platter runs in a terminal.");
     }
 
     let found = theme::find_omarchy();
@@ -89,7 +96,9 @@ async fn run(
 ) -> anyhow::Result<()> {
     let mut events = EventStream::new();
     loop {
-        terminal.draw(|frame| ui::draw(frame, app)).context("draw")?;
+        terminal
+            .draw(|frame| ui::draw(frame, app))
+            .context("draw")?;
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_millis(80)), if app.busy => {
                 app.busy_tick = app.busy_tick.wrapping_add(1);

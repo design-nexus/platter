@@ -1,4 +1,6 @@
-# disktui
+# Platter
+
+![Platter Aurora interface](docs/screenshot.png)
 
 A terminal disk manager for Linux. It covers the work GNOME Disks does — partitions, filesystems, LUKS, RAID, SMART, benchmarks, and disk images — and adds network shares in `/etc/fstab`. The interface follows the live Omarchy theme when one is installed.
 
@@ -9,14 +11,14 @@ Disk changes go through UDisks2, the same service GNOME Disks uses. Polkit asks 
 Rust and a running UDisks2 are required. Network filesystems need their mount helpers (`cifs-utils`, `nfs-utils`, `sshfs`).
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/design-nexus/disktui/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/design-nexus/platter/main/install.sh | bash
 ```
 
-The binary is installed to `~/.local/bin/disktui`. Pass `--prefix` to use another directory.
+The binary is installed to `~/.local/bin/platter`. Pass `--prefix` to use another directory.
 
-From a clone, `./install.sh` does the same build. `cargo build --release` leaves the binary at `./target/release/disktui`.
+From a clone, `./install.sh` does the same build. `cargo build --release` leaves the binary at `./target/release/platter`.
 
-`disktui /path/to/image.img` attaches that file as a loop device and selects it.
+`platter /path/to/image.img` attaches that file as a loop device and selects it.
 
 ## Screens
 
@@ -34,10 +36,16 @@ A password is written to a root-owned `0600` file under `/etc/samba/` and refere
 
 ## Themes
 
-The default theme is the live Omarchy theme, read from `~/.local/state/omarchy/current/theme/colors.toml`. Changing the theme with `omarchy theme set` updates disktui while it is open.
+The default theme is the live Omarchy theme, read from `~/.local/state/omarchy/current/theme/colors.toml`. Changing the theme with `omarchy theme set` updates platter while it is open.
 
 `t` opens the theme list. Built-in themes are Catppuccin (Mocha, Macchiato, Frappé, Latte), Tokyo Night, Dracula, Gruvbox, Nord, and Rosé Pine, plus the terminal's own colors. The choice is saved in `~/.config/disktui/config.toml`.
 
 A file at `~/.config/disktui/theme.toml` with the same keys Omarchy uses (`background`, `foreground`, `accent`, and the rest) is the Custom theme.
 
 LVM volume groups are not managed here. This UDisks build does not expose them. A logical volume that already appears as a block device can be mounted and formatted like any other volume.
+
+## Aurora interface
+
+New installations use Aurora: charcoal surfaces, lavender focus, cyan data, quiet borders, and compact headers. Existing explicit theme choices and legacy config/data locations are retained. `Ctrl+K` searches actions; Esc closes the palette. Actions use the same confirmations as their keyboard shortcuts. Tab changes focus where panes are available. Details scroll with Page Up / Page Down. Narrow layouts show the active pane; the minimum terminal is 30×10.
+
+Build requirements: Rust 1.88 or newer, Ratatui 0.30.2, Crossterm 0.29. Run `cargo test --locked` before `./install.sh`. The command is `platter`; no compatibility command aliases are installed.
