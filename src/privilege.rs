@@ -60,6 +60,9 @@ pub fn resume(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
     terminal::enable_raw_mode()?;
     io::stdout().execute(terminal::EnterAlternateScreen)?;
     io::stdout().execute(crossterm::cursor::Hide)?;
+    if !std::env::args().any(|a| a == "--no-mouse") {
+        io::stdout().execute(crossterm::event::EnableMouseCapture)?;
+    }
     terminal.clear()?;
     Ok(())
 }

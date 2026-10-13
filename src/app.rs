@@ -16,6 +16,7 @@ use crate::util::{self, human_size, kernel_name, parse_size};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
     Devices,
+    Inspector,
     Actions,
     Shares,
 }
@@ -140,6 +141,7 @@ pub enum Dialog {
 }
 
 pub struct App {
+    pub navigation: crate::navigation::State,
     pub detail_scroll: u16,
     pub commands: crate::commands::Palette,
     pub config: Config,
@@ -177,21 +179,6 @@ pub struct App {
 }
 
 impl App {
-    pub fn command_actions(&self) -> Vec<crate::commands::Action> {
-        let mut actions: Vec<_> = self
-            .actions()
-            .iter()
-            .enumerate()
-            .map(|(index, action)| crate::commands::Action {
-                label: action.id.label(),
-                key: KeyCode::F(index as u8),
-                modifiers: KeyModifiers::NONE,
-            })
-            .collect();
-        actions.extend_from_slice(ACTIONS);
-        actions
-    }
-
     fn apply_aurora_theme(&mut self, id: &str) {
         self.apply_theme(id);
     }
@@ -206,6 +193,7 @@ impl App {
     ) -> Self {
         let (uid, gid) = util::current_ids();
         let mut app = Self {
+            navigation: crate::navigation::State::default(),
             commands: crate::commands::Palette::default(),
             detail_scroll: 0,
             config,
@@ -332,29 +320,15 @@ impl App {
     }
 
     fn key_main(&mut self, key: KeyEvent) {
+        if self.navigation_key(key) {
+            return;
+        }
         if self.commands.open
             || (key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL))
         {
             let actions = self.command_actions();
             if let Some(action) = self.commands.handle(key, &actions) {
-                if action.modifiers == KeyModifiers::ALT {
-                    let id = match action.key {
-                        KeyCode::Char('o') => "omarchy",
-                        KeyCode::Char('t') => "terminal",
-                        _ => "aurora",
-                    };
-                    self.apply_aurora_theme(id);
-                } else if let KeyCode::F(index) = action.key {
-                    if let Some(action) = self.actions().get(index as usize).cloned() {
-                        if action.enabled {
-                            self.open_action(action.id);
-                        } else {
-                            self.error = action.reason;
-                        }
-                    }
-                } else {
-                    self.key_main(action.event());
-                }
+                self.dispatch_intent(action.target);
             }
             return;
         }
@@ -398,8 +372,8 @@ impl App {
                 }
             }
             KeyCode::Char('2') => self.focus_shares(),
-            KeyCode::Tab => self.cycle(1),
-            KeyCode::BackTab => self.cycle(-1),
+            KeyCode::F(6) => {}
+
             KeyCode::Char('j') | KeyCode::Down => self.move_sel(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_sel(-1),
             KeyCode::Enter => self.activate(),
@@ -413,26 +387,13 @@ impl App {
         }
     }
 
-    fn cycle(&mut self, dir: i32) {
-        let shares = matches!(self.current_kind(), Some(RowKind::Shares));
-        let forward = dir > 0;
-        self.focus = if !shares {
-            if self.focus == Focus::Devices {
-                Focus::Actions
-            } else {
-                Focus::Devices
-            }
-        } else {
-            match (self.focus, forward) {
-                (Focus::Devices, true) | (Focus::Actions, false) => Focus::Shares,
-                (Focus::Shares, true) | (Focus::Devices, false) => Focus::Actions,
-                (Focus::Actions, true) | (Focus::Shares, false) => Focus::Devices,
-            }
-        };
-    }
-
     fn move_sel(&mut self, dir: i32) {
         match self.focus {
+            Focus::Inspector => {
+                self.detail_scroll = (self.detail_scroll as i32 + dir)
+                    .max(0)
+                    .min(u16::MAX as i32) as u16;
+            }
             Focus::Actions => {
                 let len = self.actions().len();
                 if len == 0 {
@@ -441,15 +402,6 @@ impl App {
                 self.action_index = slide(self.action_index, len, dir);
             }
             Focus::Shares => {
-                let at_top = self.shares.is_empty() || self.share_index == 0;
-                if dir < 0 && at_top {
-                    self.leave_shares(true);
-                    return;
-                }
-                if self.shares.is_empty() {
-                    self.leave_shares(false);
-                    return;
-                }
                 self.share_index = slide(self.share_index, self.shares.len(), dir);
             }
             Focus::Devices => {
@@ -465,6 +417,7 @@ impl App {
 
     fn activate(&mut self) {
         match self.focus {
+            Focus::Inspector => self.focus_pane(2),
             Focus::Actions => {
                 let action = self.actions().get(self.action_index).cloned();
                 if let Some(action) = action {
@@ -2851,3 +2804,5 @@ pub const ACTIONS: &[crate::commands::Action] = &[
     crate::commands::Action::theme("Follow Omarchy theme", 'o'),
     crate::commands::Action::theme("Terminal theme", 't'),
 ];
+
+include!("navigation_impl.rs");

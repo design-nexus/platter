@@ -1,4 +1,4 @@
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap};
@@ -10,34 +10,41 @@ use crate::theme::{self, Theme};
 use crate::util::{human_size, kernel_name};
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    app.navigation.begin(frame.area());
     let theme = &app.theme;
     let area = frame.area();
     frame.render_widget(Block::default().style(theme.base()), area);
-    if area.width < 30 || area.height < 10 {
+    if area.width < 30 || area.height < 14 {
         frame.render_widget(
             Paragraph::new(
-                "platter · needs 30×10
+                "platter · needs 30×14
 Resize terminal; q quits",
             ),
             area,
         );
         return;
     }
+    let chrome = chrome(theme);
+    let area = chrome.shell(frame, area);
     let [header, body, status] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(3),
-        Constraint::Length(2),
+        Constraint::Length(crate::aurora::title_height(area.height) + 3),
+        Constraint::Min(1),
+        Constraint::Length(if area.height >= 26 { 4 } else { 3 }),
     ])
     .areas(area);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" platter", Style::default().fg(theme.accent)),
-            Span::styled(
-                "  Disks / partitions / shares",
-                Style::default().fg(theme.muted),
-            ),
-        ])),
-        header,
+    let [identity, nav] = Layout::vertical([
+        Constraint::Length(crate::aurora::title_height(area.height)),
+        Constraint::Length(3),
+    ])
+    .areas(header);
+    app.navigation_bar(frame, nav);
+    chrome.title(
+        frame,
+        identity,
+        "platter",
+        "Disks / partitions / shares",
+        "● UDisks ready",
+        Style::default().fg(theme.green),
     );
     if app.help {
         draw_help(frame, theme, body);
@@ -49,6 +56,7 @@ Resize terminal; q quits",
     if !matches!(app.dialog, Dialog::None) {
         draw_dialog(frame, app, theme, area);
     }
+    let status = chrome.footer(frame, status);
     draw_status(frame, app, theme, status);
     app.commands.draw(
         frame,
@@ -58,77 +66,254 @@ Resize terminal; q quits",
         app.theme.accent,
         app.theme.bg_raised,
     );
+    app.draw_navigation(frame);
+}
+
+fn chrome(theme: &Theme) -> crate::aurora::Chrome {
+    crate::aurora::Chrome {
+        base: theme.base(),
+        muted: Style::default().fg(theme.muted),
+        accent: Style::default().fg(theme.accent),
+        data: Style::default().fg(theme.cyan),
+        border: Style::default().fg(theme.border),
+        deep: theme.status(),
+    }
 }
 
 fn draw_main(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let compact = area.width < 70;
-    let [list_area, detail_area] = if compact {
-        if app.focus == Focus::Devices {
-            [area, Rect::default()]
-        } else {
-            [Rect::default(), area]
+    let area = crate::aurora::body(area);
+    let focused = app.focused_pane();
+    let (list, details, actions) = if area.width < 76 {
+        match focused {
+            0 => (area, Rect::default(), Rect::default()),
+            1 => (Rect::default(), area, Rect::default()),
+            _ => (Rect::default(), Rect::default(), area),
         }
     } else {
-        Layout::horizontal([
-            Constraint::Length(if area.width >= 100 { 30 } else { 24 }),
-            Constraint::Min(24),
+        let [list, _, right] = Layout::horizontal([
+            Constraint::Length(if area.width >= 100 { 32 } else { 26 }),
+            Constraint::Length(3),
+            Constraint::Min(1),
         ])
-        .areas(area)
+        .areas(area);
+        let [details, _, actions] = Layout::vertical([
+            Constraint::Percentage(55),
+            Constraint::Length(1),
+            Constraint::Min(4),
+        ])
+        .areas(right);
+        (list, details, actions)
     };
-    draw_devices(frame, app, theme, list_area);
-    let [top, actions] = Layout::vertical([
-        Constraint::Min(8),
-        Constraint::Length(if area.height >= 28 { 12 } else { 7 }),
-    ])
-    .areas(detail_area);
-    if matches!(app.current_row(), Some(RowKind::Shares)) || app.focus == Focus::Shares {
-        draw_shares(frame, app, theme, top);
-    } else {
-        draw_detail(frame, app, theme, top);
+    if !list.is_empty() {
+        app.navigation.pane(list, 0);
+        if app.navigation_screen() == 0 {
+            draw_devices(frame, app, theme, list);
+        } else {
+            let block = panel("Shares", focused == 0, theme);
+            let inner = block.inner(list);
+            frame.render_widget(block, list);
+            let items = app
+                .shares
+                .iter()
+                .map(|share| {
+                    ListItem::new(format!(
+                        "{} {} → {}",
+                        if share.mounted { "●" } else { "○" },
+                        share.source,
+                        share.target
+                    ))
+                })
+                .collect::<Vec<_>>();
+            if items.is_empty() {
+                frame.render_widget(
+                    Paragraph::new("No shares. (n) add a share.").style(theme.base()),
+                    inner,
+                );
+            } else {
+                app.navigation.list(
+                    frame,
+                    inner,
+                    0,
+                    items,
+                    app.share_index,
+                    app.navigation_skin(),
+                );
+            }
+        }
     }
-    draw_actions(frame, app, theme, actions);
+    if !details.is_empty() {
+        let block = panel("Inspector · (PgUp/PgDn) scroll", focused == 1, theme);
+        let inner = block.inner(details);
+        frame.render_widget(block, details);
+        app.navigation.pane(details, 1);
+        if app.navigation_screen() == 1 {
+            let text = app
+                .shares
+                .get(app.share_index)
+                .map(|share| {
+                    format!(
+                        "Source: {}\nFolder: {}\nType: {}\nOptions: {}\nStatus: {}",
+                        share.source,
+                        share.target,
+                        share.fstype,
+                        share.options,
+                        if share.mounted {
+                            "Connected"
+                        } else {
+                            "Disconnected"
+                        }
+                    )
+                })
+                .unwrap_or_else(|| "Select a share to inspect it".into());
+            frame.render_widget(
+                Paragraph::new(text)
+                    .style(theme.base())
+                    .wrap(Wrap { trim: false })
+                    .scroll((app.detail_scroll, 0)),
+                inner,
+            );
+        } else {
+            draw_detail(frame, app, theme, inner);
+        }
+    }
+    if !actions.is_empty() {
+        app.navigation.pane(actions, 2);
+        draw_actions(frame, app, theme, actions);
+    }
 }
 
 fn draw_devices(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let block = panel("Devices", app.focus == Focus::Devices, theme);
-    let items: Vec<ListItem> = app
-        .rows
-        .iter()
-        .map(|row| {
-            let indent = " ".repeat(row.depth as usize * 2);
-            let mark = if row.mounted { "●" } else { "○" };
-            let size = if row.size.is_empty() {
-                String::new()
-            } else {
-                format!("  {}", row.size)
-            };
-            let style = if row.mounted {
-                Style::default().fg(theme.green)
-            } else {
-                Style::default().fg(theme.fg)
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{indent}{mark} "), style),
-                Span::raw(row.label.clone()),
-                Span::styled(size, Style::default().fg(theme.fg_dim)),
-            ]))
-        })
-        .collect();
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(theme.selected());
+    if area.is_empty() {
+        return;
+    }
+    let area = crate::aurora::sidebar(
+        frame,
+        area,
+        Style::default().fg(if app.focus == Focus::Devices {
+            theme.accent
+        } else {
+            theme.border
+        }),
+    );
+    let [heading, area] = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(area);
+    frame.render_widget(
+        Paragraph::new("Devices").style(Style::default().fg(theme.accent)),
+        heading,
+    );
+    let spaced = area.height >= 24 && app.rows.len() * 2 + 5 < area.height as usize;
+    let mut items = Vec::new();
+    let mut section = "";
+    let mut selected_visual = 0;
+    let mut visual_rows = Vec::new();
+    for (index, row) in app.rows.iter().enumerate() {
+        let next_section = if matches!(row.kind, RowKind::Shares) {
+            "NETWORK"
+        } else {
+            "LOCAL DRIVES"
+        };
+        if next_section != section {
+            section = next_section;
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!(" {section}"),
+                Style::default()
+                    .fg(theme.muted)
+                    .add_modifier(Modifier::BOLD),
+            ))));
+        }
+        if index == app.selected {
+            selected_visual = items.len();
+        }
+        let tree = if row.depth > 0 { "├ " } else { "▸ " };
+        let indent = " ".repeat(row.depth as usize * 2);
+        let mark = if row.mounted { "●" } else { "○" };
+        let size = if row.size.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", row.size)
+        };
+        let style = if row.mounted {
+            Style::default().fg(theme.green)
+        } else {
+            Style::default().fg(theme.fg)
+        };
+        visual_rows.push((
+            items
+                .iter()
+                .map(|item: &ListItem| item.height())
+                .sum::<usize>(),
+            index,
+        ));
+        let mut lines = vec![Line::from(vec![
+            Span::styled(format!("{indent}{tree}"), Style::default().fg(theme.muted)),
+            Span::styled(format!("{mark} "), style),
+            Span::raw(row.label.clone()),
+            Span::styled(size, Style::default().fg(theme.fg_dim)),
+        ])];
+        if spaced {
+            lines.push(Line::from(""));
+        }
+        items.push(ListItem::new(lines));
+    }
+    let heights = items.iter().map(|item| item.height()).collect::<Vec<_>>();
+    let list = List::new(items).highlight_style(theme.selected());
     let mut state = ListState::default();
-    state.select(Some(app.selected));
+    state.select(Some(selected_visual));
     frame.render_stateful_widget(list, area, &mut state);
+    let offset = state.offset();
+    let first_line = heights.iter().take(offset).sum::<usize>();
+    for (line, index) in visual_rows {
+        if line >= first_line && line - first_line < area.height as usize {
+            app.navigation.hit(
+                Rect::new(
+                    area.x,
+                    area.y + (line - first_line) as u16,
+                    area.width,
+                    if spaced { 2 } else { 1 },
+                ),
+                crate::navigation::Intent::Row(0, index),
+            );
+        }
+    }
 }
 
 fn draw_detail(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let title = detail_title(app);
-    let block = panel(&title, false, theme);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let [bar_area, text_area] =
-        Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(inner);
+    let title = app
+        .rows
+        .get(app.selected)
+        .map(|row| row.label.clone())
+        .unwrap_or_else(|| detail_title(app));
+    let [heading, text_area, _gap, bar_area] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(0),
+        Constraint::Length(u16::from(area.height >= 10)),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    let system = match app.current_row() {
+        Some(RowKind::Volume { block }) => app.model.is_system_tree(&block),
+        Some(RowKind::Drive { drive }) => app
+            .model
+            .disk_for_drive(&drive)
+            .is_some_and(|disk| app.model.is_system_tree(&disk.path)),
+        _ => false,
+    };
+    let [label, badge] = Layout::horizontal([
+        Constraint::Min(1),
+        Constraint::Length(if system { 13 } else { 0 }),
+    ])
+    .areas(heading);
+    frame.render_widget(
+        Paragraph::new(title).style(Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)),
+        label,
+    );
+    if system {
+        frame.render_widget(
+            Paragraph::new("system volume")
+                .style(Style::default().fg(theme.yellow))
+                .alignment(Alignment::Right),
+            badge,
+        );
+    }
     let usage = if let Some(RowKind::Volume { block }) = app.current_row() {
         app.model
             .block(&block)
@@ -143,13 +328,13 @@ fn draw_detail(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             Gauge::default()
                 .ratio(ratio)
                 .gauge_style(Style::default().fg(theme.cyan).bg(theme.bg_raised))
-                .label(format!("{} used · {:.0}%", human_size(used), ratio * 100.0)),
+                .label(""),
             bar_area,
         );
     } else {
         draw_bar(frame, app, theme, bar_area);
     }
-    let lines = detail_lines(app, theme);
+    let lines = detail_lines(app, theme, text_area.width);
     let max_scroll = lines
         .iter()
         .map(|line| {
@@ -217,7 +402,26 @@ fn draw_bar(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 }
 
 fn draw_actions(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let block = panel("Actions", app.focus == Focus::Actions, theme);
+    if area.is_empty() {
+        return;
+    }
+    let block = Block::bordered()
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(Style::default().fg(if app.focus == Focus::Actions {
+            theme.accent
+        } else {
+            theme.border
+        }))
+        .padding(ratatui::widgets::Padding::horizontal(1))
+        .style(theme.base());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [heading, area] =
+        Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).areas(inner);
+    frame.render_widget(
+        Paragraph::new("Actions").style(Style::default().fg(theme.accent)),
+        heading,
+    );
     let actions = app.actions();
     let items: Vec<ListItem> = actions
         .iter()
@@ -239,20 +443,34 @@ fn draw_actions(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
                 format!("  {}", action.reason)
             };
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{key:>2}  "), Style::default().fg(theme.accent)),
+                Span::styled(
+                    if key.trim().is_empty() {
+                        "    ".into()
+                    } else {
+                        format!("({key}) ")
+                    },
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(action.id.label(), style),
-                Span::styled(reason, Style::default().fg(theme.yellow)),
+                Span::styled(reason, Style::default().fg(theme.muted)),
             ]))
         })
         .collect();
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(theme.selected());
+    let list = List::new(items).highlight_style(theme.selected());
     let mut state = ListState::default();
     if app.focus == Focus::Actions {
         state.select(Some(app.action_index));
     }
     frame.render_stateful_widget(list, area, &mut state);
+    app.navigation.rows(
+        area,
+        2,
+        state.offset(),
+        1,
+        actions.len().saturating_sub(state.offset()),
+    );
 }
 
 fn draw_shares(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
@@ -465,10 +683,23 @@ fn draw_dialog(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    "Enter confirms/saves   Esc cancels   Tab/↑↓ navigate   ← → edit/toggle",
+                    "Enter confirms/saves   Ctrl+X cancels   Tab/↑↓ navigate   ← → edit/toggle",
                     Style::default().fg(theme.muted),
                 )),
                 hint,
+            );
+            app.navigation
+                .dialog_buttons(frame, rect, app.navigation_skin());
+            app.navigation.text_rows(
+                frame,
+                body,
+                99,
+                &form
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| (i, f.label.clone()))
+                    .collect::<Vec<_>>(),
             );
         }
         Dialog::Confirm(confirm) => {
@@ -496,6 +727,8 @@ fn draw_dialog(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
                 ));
             }
             frame.render_widget(Paragraph::new(lines), inner);
+            app.navigation
+                .dialog_buttons(frame, rect, app.navigation_skin());
         }
         Dialog::Text {
             title,
@@ -554,21 +787,21 @@ fn draw_themes(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
 
 fn draw_help(frame: &mut Frame, theme: &Theme, area: Rect) {
     let text = "\
-Devices          j/k or arrows move. Enter mounts, unmounts, or unlocks
-Actions          Tab, then Enter. The letter at the left runs that action
+Devices          j/k or arrows move. Enter inspects the selected device
+Actions          F6, then Enter. The letter at the left runs that action
 m mount/unlock   u unmount   U force unmount   e mount options
 n new partition  f format    d delete          r resize    l label
 s SMART data     c self-test   b benchmark     i create image
 o restore image  p power off   g drive settings  a attach image
 t theme          x cancel job  2 network shares  ? help
-q quit           1 first disk
+q quit           1 Devices  2 Shares  Tab/Shift+Tab screens  F2 Navigate
 
 Shares           The actions pane lists the commands, same as a disk.
-                 Tab moves between disks, the share list, and actions.
-                 Esc or ← returns to the disks. ↑ on the first share does too.
+                 F6/Shift+F6 moves between the current list, Inspector, and Actions.
+                 Tab/Shift+Tab changes screens; Esc leaves the active pane.
 Destructive work asks you to type the kernel name. A system disk also asks for the word system.
 Network shares are written to /etc/fstab with sudo. Every other line is copied through unchanged.
-Esc closes a dialog. Esc during a benchmark or image copy cancels it.
+Esc closes a dialog. Ctrl+X during a benchmark or image copy cancels it.
 a aborts a SMART self-test while the SMART page is open.
 ";
     frame.render_widget(
@@ -583,8 +816,13 @@ fn draw_status(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let [keys, status] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
     frame.render_widget(
-        Paragraph::new(" Tab pane  PgUp/Dn details  ^K actions  ? help  q quit")
-            .style(theme.status()),
+        Paragraph::new(crate::navigation::shortcuts(
+            &app.footer_hints(),
+            keys.width,
+            Style::default().fg(theme.accent),
+            Style::default().fg(theme.muted),
+        ))
+        .style(theme.status()),
         keys,
     );
     let area = status;
@@ -595,7 +833,7 @@ fn draw_status(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         )
     } else if let Some(progress) = &app.progress {
         let label = if progress.cancel {
-            format!("{}    Esc cancels", progress.label)
+            format!("{}    Ctrl+X cancels", progress.label)
         } else {
             progress.label.clone()
         };
@@ -624,31 +862,65 @@ fn draw_status(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
             theme.status(),
         )
     } else {
-        (
-            if app.focus == Focus::Shares {
-                "↑↓ shares    Tab actions    Esc disks".into()
-            } else if matches!(app.current_row(), Some(RowKind::Shares))
-                && app.focus == Focus::Actions
-            {
-                "letter runs the action    Tab share list    Esc disks".into()
-            } else if matches!(app.current_row(), Some(RowKind::Shares)) {
-                "↑↓ disks    Tab shares    ? help    q quit".into()
-            } else {
-                "? help   q quit   t theme   2 shares".into()
-            },
-            theme.status(),
-        )
+        let items: &[(&str, &str)] = if app.focus == Focus::Shares {
+            &[("↑/↓", "shares"), ("F6", "actions"), ("Esc", "disks")]
+        } else if matches!(app.current_row(), Some(RowKind::Shares)) && app.focus == Focus::Actions
+        {
+            &[("letter", "run action"), ("F6", "shares"), ("Esc", "disks")]
+        } else if matches!(app.current_row(), Some(RowKind::Shares)) {
+            &[
+                ("↑/↓", "disks"),
+                ("F6", "shares"),
+                ("?", "help"),
+                ("q", "quit"),
+            ]
+        } else {
+            &[
+                ("?", "help"),
+                ("q", "quit"),
+                ("t", "theme"),
+                ("2", "shares"),
+            ]
+        };
+        frame.render_widget(
+            Paragraph::new(crate::aurora::shortcut_line(
+                items,
+                Style::default().fg(theme.accent),
+                Style::default().fg(theme.muted),
+            ))
+            .style(theme.status()),
+            area,
+        );
+        return;
     };
     frame.render_widget(Paragraph::new(text).style(style), area);
 }
 
 fn progress_line(label: &str, ratio: f64, tick: u64, width: u16, theme: &Theme) -> Line<'static> {
-    let label_width = label.chars().count() as u16 + 2;
-    let bar_w = width.saturating_sub(label_width + 6).clamp(8, 24);
+    let (label, cancel) = if let Some(label) = label.strip_suffix("    Ctrl+X cancels") {
+        (label, Some(("Ctrl+X", "cancels")))
+    } else if let Some(label) = label.strip_suffix("    x cancel") {
+        (label, Some(("x", "cancel")))
+    } else {
+        (label, None)
+    };
     let mut spans = vec![Span::styled(
         format!("{label}  "),
         Style::default().fg(theme.fg).bg(theme.bg_deep),
     )];
+    if let Some(hint) = cancel {
+        spans.extend(
+            crate::aurora::shortcut_line(
+                &[hint],
+                Style::default().fg(theme.accent),
+                Style::default().fg(theme.muted),
+            )
+            .spans,
+        );
+        spans.push(Span::raw("  "));
+    }
+    let label_width = spans.iter().map(|span| span.width() as u16).sum::<u16>();
+    let bar_w = width.saturating_sub(label_width + 6).clamp(8, 24);
     let filled = if ratio < 0.0 {
         None
     } else {
@@ -706,15 +978,28 @@ fn detail_title(app: &App) -> String {
     }
 }
 
-fn detail_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
+fn detail_lines(app: &App, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let push = |lines: &mut Vec<Line>, k: &str, v: String| {
         if v.is_empty() {
             return;
         }
         lines.push(Line::from(vec![
-            Span::styled(format!("{k:<14}"), Style::default().fg(theme.muted)),
-            Span::raw(v),
+            Span::styled(
+                format!(
+                    "{k}{}",
+                    " ".repeat(
+                        (width as usize)
+                            .saturating_sub(k.chars().count() + Span::raw(v.as_str()).width())
+                            .max(2)
+                    )
+                ),
+                Style::default().fg(theme.muted),
+            ),
+            Span::styled(
+                v,
+                Style::default().fg(if k == "Mounted" { theme.cyan } else { theme.fg }),
+            ),
         ]));
     };
     match app.current_row() {
@@ -1115,6 +1400,7 @@ fn panel<'a>(title: &'a str, focused: bool, theme: &Theme) -> Block<'a> {
     Block::default()
         .title(format!(" {title} "))
         .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
         .border_style(Style::default().fg(border))
         .style(theme.base())
 }
@@ -1223,13 +1509,136 @@ mod aurora_audit {
         );
         block.id_label = "System".into();
         block.id_type = "ext4".into();
-        block.size = 950_000_000_000;
+        block.size = model::fs_usage("/")
+            .map(|(_, total)| total)
+            .unwrap_or(950_000_000_000);
         block.mount_points = vec!["/".into()];
         block.filesystem = true;
         app.model.blocks.push(block);
         app.rows = app.model.rows();
         app.info.clear();
         app
+    }
+
+    #[tokio::test]
+    async fn common_navigation_contract_preserves_focus_and_drafts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture(dir.path().join("config.toml"));
+        app.focus_pane(0);
+        if app.navigation_editing() {
+            let _ = app.on_key(key(KeyCode::Esc));
+        }
+        let screen = app.navigation_screen();
+        let pane = app.focused_pane();
+        let _ = app.on_key(key(KeyCode::Tab));
+        assert_eq!(
+            app.navigation_screen(),
+            crate::navigation::step(
+                screen,
+                app.navigation_entries()
+                    .iter()
+                    .filter(|e| matches!(e.target, crate::navigation::Intent::Screen(_)))
+                    .count(),
+                1
+            )
+        );
+        if app.navigation_editing() {
+            let _ = app.on_key(key(KeyCode::Esc));
+        }
+        let _ = app.on_key(key(KeyCode::BackTab));
+        assert_eq!(app.navigation_screen(), screen);
+        let _ = app.on_key(key(KeyCode::F(6)));
+        assert_eq!(
+            app.focused_pane(),
+            crate::navigation::step(pane, app.pane_names().len(), 1)
+        );
+        let _ = app.on_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::SHIFT));
+        assert_eq!(app.focused_pane(), pane);
+        let _ = app.on_key(key(KeyCode::F(2)));
+        assert!(app.navigation.open);
+        let _ = app.on_key(key(KeyCode::Char('1')));
+        assert!(!app.navigation.open);
+        assert_eq!(app.navigation_screen(), 0);
+        app.select_screen(screen);
+        let _ = app.on_key(key(KeyCode::F(2)));
+        assert!(app.navigation.open);
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+        assert!(crate::audit::text(terminal.backend().buffer()).contains("Navigate"));
+        let _ = app.on_key(key(KeyCode::Esc));
+        assert!(!app.navigation.open);
+        terminal.draw(|f| draw(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut hit = None;
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width.saturating_sub(3) {
+                if buffer[(x, y)].symbol() == "("
+                    && buffer[(x + 1, y)].symbol() == "F"
+                    && buffer[(x + 2, y)].symbol() == "2"
+                {
+                    hit = Some((x, y));
+                    break;
+                }
+            }
+            if hit.is_some() {
+                break;
+            }
+        }
+        let (x, y) = hit.expect("visible clickable navigation");
+        app.navigation_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.navigation.open);
+        let _ = app.on_key(key(KeyCode::Esc));
+
+        let _ = app.on_key(commands());
+        assert!(app.commands.open);
+        let _ = app.on_key(key(KeyCode::Esc));
+    }
+    #[tokio::test]
+    async fn all_screens_and_focus_targets_fit_the_navigation_matrix() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture(dir.path().join("config.toml"));
+        let screens = app
+            .navigation_entries()
+            .iter()
+            .filter(|e| matches!(e.target, crate::navigation::Intent::Screen(_)))
+            .count();
+        for screen in 0..screens {
+            app.select_screen(screen);
+            for pane in 0..app.pane_names().len() {
+                app.focus_pane(pane);
+                for &(w, h) in &crate::audit::SIZES[..4] {
+                    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+                    terminal.draw(|f| draw(f, &app)).unwrap();
+                    let buffer = terminal.backend().buffer();
+                    assert!(
+                        crate::audit::text(buffer).contains("(F2)"),
+                        "screen {screen} pane {pane} must expose navigation at {w}x{h}"
+                    );
+                    crate::audit::verify_footer(buffer);
+                    crate::audit::capture(
+                        "platter",
+                        &format!("navigation-screen{screen}-pane{pane}"),
+                        buffer,
+                    );
+                    let before = app.navigation_screen();
+                    app.navigation_mouse(crossterm::event::MouseEvent {
+                        kind: crossterm::event::MouseEventKind::Down(
+                            crossterm::event::MouseButton::Left,
+                        ),
+                        column: w + 1,
+                        row: h + 1,
+                        modifiers: KeyModifiers::NONE,
+                    });
+                    assert_eq!(app.navigation_screen(), before);
+                }
+            }
+        }
     }
     #[test]
     fn forms_own_commands_and_image_copy_does_not_execute() {
@@ -1244,6 +1653,30 @@ mod aurora_audit {
         app.on_key(commands());
         assert!(app.commands.open);
         assert!(matches!(app.pending, crate::app::Effect::None));
+    }
+    #[test]
+    #[ignore = "interactive mock fixture for visual QA"]
+    fn live_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture(dir.path().join("config.toml"));
+        match std::env::var("AURORA_NAV_PREVIEW").as_deref() {
+            Ok("menu") => app.navigation.toggle(),
+            Ok("actions") => app.commands.open = true,
+            Ok("focused") => app.focus_pane(1),
+            _ => {}
+        }
+        crate::audit::live_preview(
+            &mut app,
+            |f, a| draw(f, a),
+            |a, k| {
+                if matches!(
+                    k.code,
+                    KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up | KeyCode::Esc
+                ) {
+                    a.on_key(k);
+                }
+            },
+        );
     }
     #[test]
     fn responsive_render_matrix() {
@@ -1267,9 +1700,13 @@ mod aurora_audit {
             let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
             term.draw(|f| draw(f, &app)).unwrap();
             let buffer = term.backend().buffer();
-            if w >= 30 && h >= 10 {
-                assert!(crate::audit::text(buffer).contains("platter"));
+            if w >= 30 && h >= 14 {
+                assert!(buffer
+                    .content
+                    .iter()
+                    .any(|cell| matches!(cell.symbol(), "█" | "▀" | "▄")));
             }
+            crate::audit::verify_footer(buffer);
             crate::audit::capture("platter", "main", buffer);
         }
         app.focus = Focus::Actions;
@@ -1293,6 +1730,7 @@ mod aurora_audit {
         for &(w, h) in &crate::audit::SIZES[..4] {
             let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
             term.draw(|f| draw(f, &app)).unwrap();
+            crate::audit::verify_footer(term.backend().buffer());
             crate::audit::capture("platter", "offline", term.backend().buffer());
         }
     }

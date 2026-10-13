@@ -1,11 +1,13 @@
 mod app;
 #[cfg(test)]
 mod audit;
+mod aurora;
 mod commands;
 mod config;
 mod fstab;
 mod model;
 mod msg;
+mod navigation;
 mod op;
 mod privilege;
 mod theme;
@@ -32,9 +34,11 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     let mut args = env::args().skip(1);
-    let attach = args.next().filter(|arg| arg != "--help" && arg != "-h");
+    let attach = args.find(|arg| !arg.starts_with("--") && arg != "-h");
     if env::args().any(|arg| arg == "--help" || arg == "-h") {
-        println!("platter [image-file]\n\nTerminal disk manager. See the README for keys.");
+        println!(
+            "platter [--no-mouse] [image-file]\n\nTerminal disk manager. See the README for keys."
+        );
         return Ok(());
     }
     if !io::stdout().is_terminal() {
@@ -82,7 +86,17 @@ async fn main() -> anyhow::Result<()> {
         hook(info);
     }));
     let mut terminal = ratatui::init();
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+        previous(info);
+    }));
+
+    if !std::env::args().any(|a| a == "--no-mouse") {
+        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
+    }
     let result = run(&mut terminal, &mut app, conn, &mut rx, tx).await;
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -96,9 +110,10 @@ async fn run(
 ) -> anyhow::Result<()> {
     let mut events = EventStream::new();
     loop {
-        terminal
+        let rendered = terminal
             .draw(|frame| ui::draw(frame, app))
             .context("draw")?;
+        aurora::paint_wordmark(rendered.buffer)?;
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_millis(80)), if app.busy => {
                 app.busy_tick = app.busy_tick.wrapping_add(1);
@@ -111,6 +126,7 @@ async fn run(
                         }
                         app.on_key(key);
                     }
+                    Some(Ok(Event::Mouse(mouse)))=>app.navigation_mouse(mouse),
                     Some(Ok(_)) => {}
                     Some(Err(_)) => {}
                     None => app.quit = true,
