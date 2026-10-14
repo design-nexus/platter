@@ -1,6 +1,6 @@
 # Platter
 
-![Platter Aurora interface](docs/screenshot.png)
+![Platter interface](docs/screenshot.png)
 
 A terminal disk manager for Linux. It covers the work GNOME Disks does — partitions, filesystems, LUKS, RAID, SMART, benchmarks, and disk images — and adds network shares in `/etc/fstab`. The interface follows the live Omarchy theme when one is installed.
 
@@ -44,9 +44,9 @@ A file at `~/.config/disktui/theme.toml` with the same keys Omarchy uses (`backg
 
 LVM volume groups are not managed here. This UDisks build does not expose them. A logical volume that already appears as a block device can be mounted and formatted like any other volume.
 
-## Aurora interface
+## Interface
 
-New installations use Aurora: charcoal surfaces, lavender focus, cyan data, quiet borders, and compact headers. Existing explicit theme choices and legacy config/data locations are retained. `Ctrl+K` searches actions; Esc closes the palette. Actions use the same confirmations as their keyboard shortcuts. Tab / Shift+Tab changes screens; F6 / Shift+F6 changes panes. F2 opens Navigation. Details scroll with Page Up / Page Down. Narrow layouts show the active pane; the minimum terminal is 30×14.
+Existing explicit theme choices and legacy config/data locations are retained. `Ctrl+K` searches actions; Esc closes the palette. Actions use the same confirmations as their keyboard shortcuts. Tab / Shift+Tab changes screens; F6 / Shift+F6 changes panes. F2 opens Navigation. Details scroll with Page Up / Page Down. Narrow layouts show the active pane; the minimum terminal is 30×14.
 
 Build requirements: Rust 1.88 or newer, Ratatui 0.30.2, Crossterm 0.29. Run `cargo test --locked` before `./install.sh`. The command is `platter`; no compatibility command aliases are installed.
 
